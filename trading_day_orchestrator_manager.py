@@ -299,7 +299,7 @@ class TradingDayOrchestratorManager:
                 "stage_no": 13, "stage_name": "异常注入回放验证层", "entry_type": "method",
                 "entry_target": "trading_day_orchestrator_manager.TradingDayOrchestratorManager._stage_replay_validation",
                 "entry_kwargs": {"__init_kwargs__": init_kwargs, "trading_date": trading_date},
-                "enabled": self.enable_replay_validation,
+                "enabled": self.enable_replay_validation or self.strict_realtime_core,
             },
         ]
 
