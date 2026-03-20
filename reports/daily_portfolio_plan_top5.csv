@@ -1,0 +1,6 @@
+﻿portfolio_rank,trade_date,code,name,action,heat_level,score,entry_price,stop_loss,target_price,suggested_shares,suggested_position_pct,expected_loss_amt,expected_profit_amt,planned_position_amt,turnover_amount,turnover_rate,backtest_score,win_rate
+1,2026-03-20,sh.600289,,正常跟踪,正常,79.0,8.37,7.95,9.21,100,0.0008,42.0,84.0,837.0,,,,
+2,2026-03-20,sz.002650,,正常跟踪,正常,74.0,6.67,6.34,7.34,100,0.0007,33.0,67.0,667.0,,,,
+3,2026-03-20,sh.601216,,正常跟踪,正常,68.0,6.29,5.98,6.92,100,0.0006,31.0,63.0,629.0,,,,
+4,2026-03-20,sz.300506,,正常跟踪,正常,59.0,5.29,5.03,5.82,100,0.0005,26.0,53.0,529.0,,,,
+5,2026-03-20,sh.603007,,正常跟踪,正常,37.0,6.9,6.55,7.59,100,0.0007,35.0,69.0,690.0,,,,

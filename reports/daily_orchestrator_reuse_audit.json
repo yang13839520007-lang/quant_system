@@ -1,0 +1,30 @@
+{
+  "trading_date": "2026-03-20",
+  "strict_realtime_core": true,
+  "reuse_violation_action": "reject",
+  "realtime_required_stage_nos": [
+    1,
+    2,
+    4,
+    5,
+    6,
+    7
+  ],
+  "reuse_audit_status": "FULL_REALTIME_READY",
+  "production_mode_label": "FULL_REALTIME_RECOMPUTE",
+  "reuse_metrics": {
+    "stage_count": 15,
+    "reused_stage_count": 0,
+    "repaired_stage_count": 0,
+    "failed_stage_count": 0,
+    "skipped_stage_count": 1,
+    "core_stage_count": 6,
+    "core_reused_count": 0,
+    "core_failed_count": 0,
+    "core_skipped_count": 0,
+    "core_policy_rejected_count": 0,
+    "core_success_executed_like_count": 6,
+    "core_realtime_coverage_ratio": 1.0
+  },
+  "output_csv_path": "C:\\quant_system\\reports\\daily_orchestrator_reuse_audit.csv"
+}

@@ -1,0 +1,2 @@
+﻿anomaly_type,anomaly_count,code_count,p1_count,p2_count,p3_count,p4_count,planned_shares_sum,actual_shares_sum,share_gap_sum,planned_notional_sum,actual_notional_sum,notional_gap_sum,avg_execution_ratio,avg_position_deviation_pct,avg_slippage_pct,max_priority_score
+委托未成交,5,5,0,5,0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,82

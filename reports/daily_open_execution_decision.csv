@@ -1,0 +1,6 @@
+﻿execution_rank,code,open_price,entry_price,final_action,order_ratio,final_order_shares,final_order_price,final_order_capital,final_keep_flag,final_drop_reason
+1,sh.600289,8.37,8.37,正常买入,1.0,100,8.37,837.0,1,
+2,sz.002650,6.67,6.67,正常买入,1.0,100,6.67,667.0,1,
+3,sh.601216,6.29,6.29,正常买入,1.0,100,6.29,629.0,1,
+4,sz.300506,5.29,5.29,正常买入,1.0,100,5.29,529.0,1,
+5,sh.603007,6.9,6.9,正常买入,1.0,100,6.9,690.0,1,

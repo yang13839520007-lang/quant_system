@@ -1,0 +1,38 @@
+﻿file_name,error
+backtest_5years_winrate.csv,'utf-8' codec can't decode byte 0xb4 in position 0: invalid start byte
+backtest_details.csv,'utf-8' codec can't decode byte 0xb4 in position 0: invalid start byte
+custom_11_result.csv,'utf-8' codec can't decode byte 0xb4 in position 0: invalid start byte
+experiment_log.csv,"CSV缺失字段: ['date', 'code', 'open', 'high', 'low', 'close', 'preclose', 'volume', 'amount', 'pctChg', 'turn', 'peTTM', 'pbMRQ']"
+optimized_trades.csv,'utf-8' codec can't decode byte 0xb4 in position 0: invalid start byte
+sh.512940.csv,数据太少，至少需要20行以上
+sh.515970.csv,数据太少，至少需要20行以上
+sh.520610.csv,数据太少，至少需要20行以上
+sh.520760.csv,数据太少，至少需要20行以上
+sh.520930.csv,数据太少，至少需要20行以上
+sh.530060.csv,数据太少，至少需要20行以上
+sh.560230.csv,数据太少，至少需要20行以上
+sh.560270.csv,数据太少，至少需要20行以上
+sh.560290.csv,数据太少，至少需要20行以上
+sh.560310.csv,数据太少，至少需要20行以上
+sh.560370.csv,数据太少，至少需要20行以上
+sh.560390.csv,数据太少，至少需要20行以上
+sh.560710.csv,数据太少，至少需要20行以上
+sh.563560.csv,数据太少，至少需要20行以上
+sh.589170.csv,数据太少，至少需要20行以上
+sh.603284.csv,数据太少，至少需要20行以上
+sh.688816.csv,数据太少，至少需要20行以上
+sh.688818.csv,数据太少，至少需要20行以上
+sz.159135.csv,数据太少，至少需要20行以上
+sz.159148.csv,数据太少，至少需要20行以上
+sz.159153.csv,数据太少，至少需要20行以上
+sz.159156.csv,数据太少，至少需要20行以上
+sz.159157.csv,数据太少，至少需要20行以上
+sz.159159.csv,数据太少，至少需要20行以上
+sz.159163.csv,数据太少，至少需要20行以上
+sz.159165.csv,数据太少，至少需要20行以上
+sz.159167.csv,数据太少，至少需要20行以上
+sz.159168.csv,数据太少，至少需要20行以上
+sz.159169.csv,数据太少，至少需要20行以上
+sz.159171.csv,数据太少，至少需要20行以上
+sz.159175.csv,数据太少，至少需要20行以上
+sz.301680.csv,数据太少，至少需要20行以上

@@ -1,0 +1,6 @@
+﻿trade_date,code,planned_action,planned_shares,planned_price,execution_rank,stock_file,status,reason,bar_date,date_fallback_flag,fill_price,fill_time,fill_logic
+2026-03-17,sh.603588,正常买入,4200,16.55,1,C:\quant_system\stock_data_5years\sh.603588.csv,已生成模拟成交,,2026-03-16,1,15.4624,09:35:00,买入-开盘可成交
+2026-03-17,sz.002733,正常买入,2000,28.42,2,C:\quant_system\stock_data_5years\sz.002733.csv,已生成模拟成交,,2026-03-16,1,27.2818,09:35:00,买入-开盘可成交
+2026-03-17,sh.600367,正常买入,2200,27.1,3,C:\quant_system\stock_data_5years\sh.600367.csv,已生成模拟成交,,2026-03-16,1,26.4211,09:35:00,买入-开盘可成交
+2026-03-17,sz.002831,正常买入,2100,38.65,4,C:\quant_system\stock_data_5years\sz.002831.csv,已生成模拟成交,,2026-03-16,1,34.5876,09:35:00,买入-开盘可成交
+2026-03-17,sz.002636,正常买入,1800,32.3,5,C:\quant_system\stock_data_5years\sz.002636.csv,已生成模拟成交,,2026-03-16,1,29.2234,09:35:00,买入-开盘可成交

@@ -1,0 +1,10 @@
+﻿case_id,code,expected_anomaly_type,expected_priority_hint,expected_review_owner,should_track_next_day,expected_hit,case_note,row_type
+CASE00,sh.600010,正常样本,,,否,1,正常样本，不应产生任何异常。,recon_detail
+CASE01,sh.600011,计划漏发,P1,执行侧,是,1,计划存在，但对账明细缺失。,missing_in_recon
+CASE02,sh.600012,委托未成交,P1,执行侧,是,1,存在计划，但无有效成交。,recon_detail
+CASE03,sh.600013,部分成交,P2,执行侧,是,1,成交完成度不足。,recon_detail
+CASE04,sz.002701,手工临时交易,P1,人工操作侧,是,1,无系统计划但存在人工临时成交。,recon_detail
+CASE05,sz.002702,价格滑点超阈值,P2,执行侧,是,1,价格不利滑点超阈值。,recon_detail
+CASE06,sz.002703,仓位执行偏差,P2,风控侧,是,1,实际股数偏离目标仓位。,recon_detail
+CASE07,sz.002704,非系统交易,P1,通道侧,是,1,无系统计划但存在外部来源成交。,recon_detail
+CASE08,sh.600014,方向执行异常,P1,执行侧,是,1,计划方向与实际方向不一致。,recon_detail

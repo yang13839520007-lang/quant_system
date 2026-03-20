@@ -1,0 +1,6 @@
+﻿trade_date,code,action,planned_shares,planned_price,execution_rank,position_status,plan_source,match_status
+,sh.603588,正常买入,4200,16.55,1,持仓-浮盈,daily_close_review_baseline,UNFILLED
+,sz.002733,正常买入,2000,28.42,2,持仓-浮盈,daily_close_review_baseline,UNFILLED
+,sh.600367,正常买入,2200,27.1,3,持仓-浮盈,daily_close_review_baseline,UNFILLED
+,sz.002831,正常买入,2100,38.65,4,持仓-浮盈,daily_close_review_baseline,UNFILLED
+,sz.002636,正常买入,1800,32.3,5,持仓-浮亏,daily_close_review_baseline,UNFILLED
