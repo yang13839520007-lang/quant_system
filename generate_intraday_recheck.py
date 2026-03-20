@@ -10,15 +10,32 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Dict
+from typing import Any, Dict
 
 from core.intraday_recheck_manager import IntradayRecheckManager
 
 BASE_DIR = r"C:\quant_system"
 
+
+def _normalize_result(raw_result: Any) -> Dict:
+    if isinstance(raw_result, dict):
+        result = dict(raw_result)
+    elif isinstance(raw_result, tuple) and len(raw_result) == 3 and isinstance(raw_result[2], dict):
+        decision_df, orders_df, summary = raw_result
+        result = dict(summary)
+        result.setdefault("decision_rows", int(len(decision_df)))
+        result.setdefault("order_rows", int(len(orders_df)))
+    else:
+        result = {"result": raw_result}
+
+    result["stage_status"] = "SUCCESS_EXECUTED"
+    result["success"] = True
+    return result
+
+
 def run(trading_date: str, base_dir: str = BASE_DIR) -> Dict:
     manager = IntradayRecheckManager(base_dir=base_dir)
-    return manager.run(trading_date=trading_date)
+    return _normalize_result(manager.run(trading_date=trading_date))
 
 def main():
     parser = argparse.ArgumentParser(description="盘中二次确认层")
