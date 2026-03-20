@@ -1,6 +1,0 @@
-﻿trading_date,execution_rank,code,name,priority_level,priority_score,plan_entry_price,recheck_price,open_price,latest_price,prev_close,open_price_source,prev_close_source,volume_source,recheck_gap_pct,recheck_slippage_vs_entry_pct,stop_loss,target_price,planned_shares,stage06_order_action,stage06_decision,stage06_reason,order_action,execute_ratio,order_shares,order_price,order_amt,decision,decision_reason,generated_at
-2026-03-20,1,sh.600289,,,,8.37,8.37,7.91,8.37,7.97,open_price,prev_close,volume,0.050188205771643624,0.0,,,0,,,,NONE,0.0,0,,0.0,KEEP_WATCH_NO_PRICE,无有效盘中价格，维持观察,2026-03-20 22:51:43
-2026-03-20,2,sz.002650,,,,6.67,6.67,6.47,6.67,6.48,open_price,prev_close,volume,0.029320987654321007,0.0,,,0,,,,NONE,0.0,0,,0.0,KEEP_WATCH_NO_PRICE,无有效盘中价格，维持观察,2026-03-20 22:51:43
-2026-03-20,3,sh.601216,,,,6.29,6.29,6.44,6.29,6.4,open_price,prev_close,volume,-0.017187500000000022,0.0,,,0,,,,NONE,0.0,0,,0.0,KEEP_WATCH_NO_PRICE,无有效盘中价格，维持观察,2026-03-20 22:51:43
-2026-03-20,4,sz.300506,,,,5.29,5.29,5.1,5.29,5.11,open_price,prev_close,volume,0.03522504892367895,0.0,,,0,,,,NONE,0.0,0,,0.0,KEEP_WATCH_NO_PRICE,无有效盘中价格，维持观察,2026-03-20 22:51:43
-2026-03-20,5,sh.603007,,,,6.9,6.9,7.25,6.9,7.26,open_price,prev_close,volume,-0.04958677685950408,0.0,,,0,,,,NONE,0.0,0,,0.0,KEEP_WATCH_NO_PRICE,无有效盘中价格，维持观察,2026-03-20 22:51:43

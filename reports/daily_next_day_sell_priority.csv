@@ -1,2 +1,0 @@
-﻿execution_rank,execution_tier,portfolio_rank,code,entry_price,stop_loss,target_price,filled_shares,avg_fill_price,close_price,unrealized_pnl_amt,unrealized_pnl_pct,position_status,next_day_action,management_action,management_reason,management_priority_score,hold_pool_flag,watch_pool_flag,sell_priority_flag,take_profit_priority_flag
-5,候补执行,4,sz.002636,32.02,27.63,40.8,1800,32.3,32.18,-215.99999999999272,-0.0037151702786376,持仓-浮亏,次日观察是否减弱,弱转强观察,收盘浮亏，次日优先看承接与修复,70.3715,1,0,1,0

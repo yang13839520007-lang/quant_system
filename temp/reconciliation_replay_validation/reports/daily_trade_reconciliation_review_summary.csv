@@ -1,5 +1,0 @@
-﻿responsibility_owner,anomaly_count,code_count,p1_count,p2_count,p3_count,p4_count,next_day_track_count,strategy_revision_count,execution_fix_count,pending_count,confirmed_count,fixed_count,waived_count,next_day_follow_count
-执行侧,5,5,0,0,0,5,5,1,5,5,0,0,0,0
-风控侧,2,2,0,0,0,2,2,0,2,2,0,0,0,0
-通道侧,1,1,0,0,0,1,1,0,1,1,0,0,0,0
-人工操作侧,1,1,0,0,0,1,1,0,0,1,0,0,0,0

@@ -1,9 +1,0 @@
-行情快照扫描摘要
-项目根目录: C:\quant_system
-候选代码数: 7113
-索引命中代码数: 7153
-扫描记录数: 7153
-
-Top 扫描目录:
-- C:\quant_system\stock_data_5years: 7145
-- C:\quant_system\stock_data_5years\models: 8

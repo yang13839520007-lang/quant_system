@@ -1,6 +1,0 @@
-﻿trading_date,portfolio_rank,code,name,score,entry_price,stop_loss,target_price,suggested_shares,suggested_position_pct,expected_loss_amt,expected_profit_amt,risk_review_passed,risk_review_note,risk_review_time
-2026-03-20,1,sh.600289,,79.0,8.37,7.95,9.21,100,0.0008,42.0,84.0,True,,2026-03-20 22:51:43
-2026-03-20,2,sz.002650,,74.0,6.67,6.34,7.34,100,0.0007,33.0,67.0,True,,2026-03-20 22:51:43
-2026-03-20,3,sh.601216,,68.0,6.29,5.98,6.92,100,0.0006,31.0,63.0,True,,2026-03-20 22:51:43
-2026-03-20,4,sz.300506,,59.0,5.29,5.03,5.82,100,0.0005,26.0,53.0,True,,2026-03-20 22:51:43
-2026-03-20,5,sh.603007,,37.0,6.9,6.55,7.59,100,0.0007,35.0,69.0,True,,2026-03-20 22:51:43
