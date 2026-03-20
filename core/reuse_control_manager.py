@@ -90,9 +90,15 @@ class ReuseControlManager:
         trading_date: str,
         stage_results: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        business_stage_results = []
+        for row in stage_results:
+            stage_no = row.get("stage_no")
+            if isinstance(stage_no, int) and 0 <= stage_no <= 13:
+                business_stage_results.append(row)
+
         rows: List[Dict[str, Any]] = []
 
-        for row in stage_results:
+        for row in business_stage_results:
             stage_no = int(row.get("stage_no", 0))
             stage_status = normalize_stage_status(row, row.get("stage_status"))
             is_reused = stage_status == "SUCCESS_REUSED"
