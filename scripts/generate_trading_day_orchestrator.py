@@ -10,13 +10,10 @@ from __future__ import annotations
 
 import argparse
 import inspect
-import json
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -88,159 +85,33 @@ def _resolve_reports_dir(args: argparse.Namespace, manager: Any = None, result: 
 
 
 def _patch_reuse_audit_csv(reports_dir: Path, stage01_ok: bool, stage08_ok: bool) -> bool:
-    return False
-    audit_csv = reports_dir / "daily_orchestrator_reuse_audit.csv"
-    if not audit_csv.exists():
-        return False
-
-    try:
-        df = pd.read_csv(audit_csv, encoding="utf-8-sig")
-        changed = False
-
-        status_col = None
-        for col in ["stage_status", "status"]:
-            if col in df.columns:
-                status_col = col
-                break
-
-        policy_level_col = None
-        for col in ["policy_level", "policy_expected"]:
-            if col in df.columns:
-                policy_level_col = col
-                break
-
-        policy_message_col = None
-        for col in ["policy_message", "message"]:
-            if col in df.columns:
-                policy_message_col = col
-                df[policy_message_col] = df[policy_message_col].astype(object)
-                break
-
-        if not status_col:
-            return False
-
-        if stage01_ok:
-            mask = (df["stage_no"] == 1) & (df[status_col] == "FAILED")
-            if mask.any():
-                df.loc[mask, status_col] = "SUCCESS_EXECUTED"
-                if policy_level_col:
-                    df.loc[mask, policy_level_col] = "POST_RUN_ARTIFACT_VERIFIED"
-                if policy_message_col:
-                    df.loc[mask, policy_message_col] = "Stage 01 产物校验通过，按执行成功修正"
-                changed = True
-
-        if stage08_ok:
-            mask = (df["stage_no"] == 8) & (df[status_col] == "FAILED")
-            if mask.any():
-                df.loc[mask, status_col] = "SUCCESS_EXECUTED"
-                if policy_level_col:
-                    df.loc[mask, policy_level_col] = "POST_RUN_ARTIFACT_VERIFIED"
-                if policy_message_col:
-                    df.loc[mask, policy_message_col] = "Stage 08 产物校验通过，按执行成功修正"
-                changed = True
-
-        if changed:
-            df.to_csv(audit_csv, index=False, encoding="utf-8-sig")
-            return True
-            
-    except Exception as e:
-        print(f"[POST-FIX ERROR] 修正 audit csv 失败: {e}")
-        
+    # Historical post-run mutation hook intentionally disabled.
+    # Reuse-audit artifacts are emitted directly by the orchestrator managers.
     return False
 
 
 def _patch_stage_status_csv(reports_dir: Path, stage01_ok: bool, stage08_ok: bool) -> bool:
-    return False
-    status_csv = reports_dir / "daily_orchestrator_stage_status.csv"
-    if not status_csv.exists():
-        return False
-
-    try:
-        df = pd.read_csv(status_csv, encoding="utf-8-sig")
-        changed = False
-
-        status_col = None
-        for col in ["stage_status", "status"]:
-            if col in df.columns:
-                status_col = col
-                break
-
-        if not status_col:
-            return False
-
-        if stage01_ok:
-            mask = (df["stage_no"] == 1) & (df[status_col] == "FAILED")
-            if mask.any():
-                df.loc[mask, status_col] = "SUCCESS_EXECUTED"
-                changed = True
-
-        if stage08_ok:
-            mask = (df["stage_no"] == 8) & (df[status_col] == "FAILED")
-            if mask.any():
-                df.loc[mask, status_col] = "SUCCESS_EXECUTED"
-                changed = True
-
-        if changed:
-            df.to_csv(status_csv, index=False, encoding="utf-8-sig")
-            return True
-            
-    except Exception as e:
-        print(f"[POST-FIX ERROR] 修正 stage status csv 失败: {e}")
-
+    # Historical post-run mutation hook intentionally disabled.
+    # Stage status artifacts are emitted by the post-run acceptance manager.
     return False
 
 
 def _patch_summary_json(reports_dir: Path, stage01_ok: bool, stage08_ok: bool, summary: Dict) -> bool:
-    return False
-    json_path = reports_dir / "daily_orchestrator_acceptance.json"
-    if not json_path.exists():
-        return False
-
-    changed = False
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        counts = data.get("stage_status_counts", {})
-        
-        if stage01_ok:
-            for stage in summary.get("stage_results", []):
-                if stage.get("stage_no") == 1 and stage.get("stage_status") == "FAILED":
-                    stage["stage_status"] = "SUCCESS_EXECUTED"
-                    counts["FAILED"] = max(0, counts.get("FAILED", 0) - 1)
-                    counts["SUCCESS_EXECUTED"] = counts.get("SUCCESS_EXECUTED", 0) + 1
-                    changed = True
-                    
-        if stage08_ok:
-            for stage in summary.get("stage_results", []):
-                if stage.get("stage_no") == 8 and stage.get("stage_status") == "FAILED":
-                    stage["stage_status"] = "SUCCESS_EXECUTED"
-                    counts["FAILED"] = max(0, counts.get("FAILED", 0) - 1)
-                    counts["SUCCESS_EXECUTED"] = counts.get("SUCCESS_EXECUTED", 0) + 1
-                    changed = True
-
-        if changed:
-            data["stage_status_counts"] = counts
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
-
-    except Exception as e:
-        print(f"[POST-FIX ERROR] 修正 summary json 失败: {e}")
-        
+    # Historical post-run mutation hook intentionally disabled.
+    # The wrapper no longer rewrites acceptance JSON after the orchestrator finishes.
     return False
 
 
 def _repair_orchestrator_outputs(reports_dir: Path, summary: Dict) -> Dict:
     stage01_files = [
         reports_dir / "daily_candidates_all.csv",
-        reports_dir / "daily_candidates_top20.csv"
+        reports_dir / "daily_candidates_top20.csv",
     ]
     stage01_ok = all(p.exists() and p.stat().st_size > 50 for p in stage01_files)
 
     stage08_files = [
         reports_dir / "daily_close_review.csv",
-        reports_dir / "daily_close_positions.csv"
+        reports_dir / "daily_close_positions.csv",
     ]
     stage08_ok = all(p.exists() and p.stat().st_size > 50 for p in stage08_files)
 
@@ -251,48 +122,6 @@ def _repair_orchestrator_outputs(reports_dir: Path, summary: Dict) -> Dict:
         "csv_changed": False,
         "status_changed": False,
         "json_changed": False,
-    }
-
-    changed = False
-
-    if summary and "stage_results" in summary:
-        for stage in summary["stage_results"]:
-            if stage.get("stage_no") == 1 and stage.get("stage_status") == "FAILED" and stage01_ok:
-                stage["stage_status"] = "SUCCESS_EXECUTED"
-                changed = True
-            elif stage.get("stage_no") == 8 and stage.get("stage_status") == "FAILED" and stage08_ok:
-                stage["stage_status"] = "SUCCESS_EXECUTED"
-                changed = True
-
-        if changed:
-            counts = summary.get("stage_status_counts", {})
-            failed_count = sum(1 for s in summary["stage_results"] if s.get("stage_status") == "FAILED")
-            success_count = sum(1 for s in summary["stage_results"] if str(s.get("stage_status", "")).startswith("SUCCESS"))
-            
-            counts["FAILED"] = failed_count
-            counts["SUCCESS_EXECUTED"] = success_count
-            
-            summary["overall_status"] = "SUCCESS" if failed_count == 0 else "FAILED"
-            
-            if failed_count == 0 and summary.get("acceptance_status") == "REJECTED_FAILED_STAGE":
-                target_status = "PASS_REUSE_MODE" if counts.get("SUCCESS_REUSED", 0) > 0 else "PASS_REALTIME_MODE"
-                summary["acceptance_status"] = target_status
-                
-            if failed_count == 0 and summary.get("run_mode_label") == "FAILED_ORCHESTRATION":
-                target_mode_label = "STABLE_DISPATCH_REUSE" if counts.get("SUCCESS_REUSED", 0) > 0 else "FULL_REALTIME_RECOMPUTE"
-                summary["run_mode_label"] = target_mode_label
-                summary["production_mode_label"] = target_mode_label
-
-    csv_changed = _patch_reuse_audit_csv(reports_dir, stage01_ok=stage01_ok, stage08_ok=stage08_ok)
-    status_changed = _patch_stage_status_csv(reports_dir, stage01_ok=stage01_ok, stage08_ok=stage08_ok)
-    json_changed = _patch_summary_json(reports_dir, stage01_ok=stage01_ok, stage08_ok=stage08_ok, summary=summary)
-
-    changed = changed or csv_changed or status_changed or json_changed
-
-    return {
-        "changed": changed,
-        "stage01_fixed": stage01_ok,
-        "stage08_fixed": stage08_ok
     }
 
 
@@ -306,7 +135,7 @@ def normalize_orchestrator_result(result: Dict) -> Dict:
 def _instantiate_manager(cls, args: argparse.Namespace) -> Any:
     sig = inspect.signature(cls.__init__)
     kwargs = {}
-    
+
     if "base_dir" in sig.parameters:
         kwargs["base_dir"] = args.base_dir
     if "enable_replay_validation" in sig.parameters:
@@ -317,7 +146,7 @@ def _instantiate_manager(cls, args: argparse.Namespace) -> Any:
         kwargs["strict_realtime_core"] = args.strict_realtime_core
     if "reuse_violation_action" in sig.parameters:
         kwargs["reuse_violation_action"] = args.reuse_violation_action
-    
+
     manager = cls(**kwargs)
     return manager
 
@@ -329,14 +158,14 @@ def _invoke_run(manager: Any, args: argparse.Namespace) -> Dict:
         "date": args.trading_date,
         "as_of_date": args.trading_date,
     }
-    
+
     sig = inspect.signature(manager.run)
     run_kwargs = {}
-    
+
     for param_name in sig.parameters:
         if param_name in inject_pairs:
             run_kwargs[param_name] = inject_pairs[param_name]
-            
+
     return manager.run(**run_kwargs)
 
 
@@ -344,16 +173,16 @@ def main() -> None:
     args = parse_args()
 
     import trading_day_orchestrator_manager  # noqa: E402
-    
+
     manager_cls = getattr(trading_day_orchestrator_manager, "TradingDayOrchestratorManager")
     manager = _instantiate_manager(manager_cls, args)
     result = _invoke_run(manager, args)
-    
+
     result = normalize_orchestrator_result(result)
-    
+
     reports_dir = _resolve_reports_dir(args, manager=manager, result=result)
     post_fix = _repair_orchestrator_outputs(reports_dir, summary=result)
-    
+
     if post_fix.get("changed"):
         print("[POST-FIX] 已基于产物校验修正主控收尾摘要与复用审计工件")
 
