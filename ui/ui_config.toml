@@ -1,0 +1,10 @@
+project_root = ".."
+reports_dir = "reports"
+logs_dir = "temp/ui_logs"
+orchestrator_entry = "ui/orchestrator_entry.py"
+python_executable = ""
+auto_refresh_ms = 30000
+window_title = "A股量化交易监控终端"
+window_width = 1600
+window_height = 980
+runtime_log_limit = 800
