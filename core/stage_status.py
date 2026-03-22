@@ -16,6 +16,9 @@ SUCCESS_REUSED = "SUCCESS_REUSED"
 SUCCESS_REPAIRED = "SUCCESS_REPAIRED"
 FAILED = "FAILED"
 SKIPPED = "SKIPPED"
+NON_TRADING_DAY = "NON_TRADING_DAY"
+WAITING_MARKET_DATA = "WAITING_MARKET_DATA"
+DATA_STALE = "DATA_STALE"
 
 SUCCESS_STATUS_SET = {
     SUCCESS_EXECUTED,
@@ -29,6 +32,15 @@ ALL_STAGE_STATUS_SET = {
     SUCCESS_REPAIRED,
     FAILED,
     SKIPPED,
+    NON_TRADING_DAY,
+    WAITING_MARKET_DATA,
+    DATA_STALE,
+}
+
+DATA_PENDING_STATUS_SET = {
+    NON_TRADING_DAY,
+    WAITING_MARKET_DATA,
+    DATA_STALE,
 }
 
 
@@ -76,6 +88,9 @@ def normalize_stage_status(
     - SUCCESS_REPAIRED
     - FAILED
     - SKIPPED
+    - NON_TRADING_DAY
+    - WAITING_MARKET_DATA
+    - DATA_STALE
     """
     result = stage_result or {}
     status = _safe_upper(raw_status or result.get("stage_status") or result.get("status"))
@@ -163,6 +178,10 @@ def is_success_stage(stage_status: str) -> bool:
     return _safe_upper(stage_status) in SUCCESS_STATUS_SET
 
 
+def is_data_pending_stage(stage_status: str) -> bool:
+    return _safe_upper(stage_status) in DATA_PENDING_STATUS_SET
+
+
 def build_stage_status_counts(stage_results: List[Dict[str, Any]]) -> Dict[str, int]:
     counts = {
         SUCCESS_EXECUTED: 0,
@@ -170,6 +189,9 @@ def build_stage_status_counts(stage_results: List[Dict[str, Any]]) -> Dict[str, 
         SUCCESS_REPAIRED: 0,
         FAILED: 0,
         SKIPPED: 0,
+        NON_TRADING_DAY: 0,
+        WAITING_MARKET_DATA: 0,
+        DATA_STALE: 0,
     }
     for row in stage_results:
         status = normalize_stage_status(row, row.get("stage_status"))
@@ -187,6 +209,12 @@ def derive_run_mode_label(stage_results: List[Dict[str, Any]]) -> str:
     counts = build_stage_status_counts(stage_results)
     if counts.get(FAILED, 0) > 0:
         return "FAILED_ORCHESTRATION"
+    if counts.get(NON_TRADING_DAY, 0) > 0:
+        return NON_TRADING_DAY
+    if counts.get(DATA_STALE, 0) > 0:
+        return DATA_STALE
+    if counts.get(WAITING_MARKET_DATA, 0) > 0:
+        return WAITING_MARKET_DATA
     if counts.get(SUCCESS_REUSED, 0) > 0:
         return "STABLE_DISPATCH_REUSE"
     return "FULL_REALTIME_RECOMPUTE"

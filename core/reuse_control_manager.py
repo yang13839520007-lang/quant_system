@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 import pandas as pd
 
-from core.stage_status import normalize_stage_status
+from core.stage_status import DATA_STALE, NON_TRADING_DAY, WAITING_MARKET_DATA, normalize_stage_status
 
 
 DEFAULT_CORE_REALTIME_REQUIRED_STAGE_NOS: Set[int] = {1, 2, 4, 5, 6, 7}
@@ -97,6 +97,7 @@ class ReuseControlManager:
                 business_stage_results.append(row)
 
         rows: List[Dict[str, Any]] = []
+        pending_status_set = {NON_TRADING_DAY, WAITING_MARKET_DATA, DATA_STALE}
 
         for row in business_stage_results:
             stage_no = int(row.get("stage_no", 0))
@@ -105,6 +106,7 @@ class ReuseControlManager:
             is_repaired = stage_status == "SUCCESS_REPAIRED"
             is_failed = stage_status == "FAILED"
             is_skipped = stage_status == "SKIPPED"
+            is_pending = stage_status in pending_status_set
             is_core_required = stage_no in self.realtime_required_stage_nos
             policy_rejected = bool(row.get("policy_rejected"))
 
@@ -119,6 +121,8 @@ class ReuseControlManager:
                 violation_type = "CORE_STAGE_FAILED"
             elif is_core_required and is_skipped:
                 violation_type = "CORE_STAGE_SKIPPED"
+            elif is_core_required and is_pending:
+                violation_type = "CORE_STAGE_PENDING_DATA"
 
             rows.append(
                 {
@@ -131,6 +135,7 @@ class ReuseControlManager:
                     "is_repaired": is_repaired,
                     "is_failed": is_failed,
                     "is_skipped": is_skipped,
+                    "is_pending": is_pending,
                     "is_core_realtime_required": is_core_required,
                     "policy_rejected": policy_rejected,
                     "policy_expected": policy_expected,
@@ -151,6 +156,7 @@ class ReuseControlManager:
         core_reused_count = int((core_df["is_reused"] == True).sum()) if not core_df.empty else 0
         core_failed_count = int((core_df["is_failed"] == True).sum()) if not core_df.empty else 0
         core_skipped_count = int((core_df["is_skipped"] == True).sum()) if not core_df.empty else 0
+        core_pending_count = int((core_df["is_pending"] == True).sum()) if not core_df.empty else 0
         core_policy_rejected_count = int((core_df["policy_rejected"] == True).sum()) if not core_df.empty else 0
         core_success_executed_like_count = int(
             core_df["stage_status"].isin(["SUCCESS_EXECUTED", "SUCCESS_REPAIRED"]).sum()
@@ -160,6 +166,7 @@ class ReuseControlManager:
         repaired_stage_count = int((df["is_repaired"] == True).sum()) if not df.empty else 0
         failed_stage_count = int((df["is_failed"] == True).sum()) if not df.empty else 0
         skipped_stage_count = int((df["is_skipped"] == True).sum()) if not df.empty else 0
+        pending_stage_count = int((df["is_pending"] == True).sum()) if not df.empty else 0
 
         core_realtime_coverage_ratio = (
             round(core_success_executed_like_count / core_stage_count, 4)
@@ -168,7 +175,7 @@ class ReuseControlManager:
 
         if core_policy_rejected_count > 0:
             production_mode_label = "CORE_CHAIN_BLOCKED_BY_REJECT"
-        elif core_failed_count > 0 or core_skipped_count > 0:
+        elif core_failed_count > 0 or core_skipped_count > 0 or core_pending_count > 0:
             production_mode_label = "CORE_CHAIN_NOT_REALTIME"
         elif core_reused_count > 0:
             production_mode_label = "CORE_CHAIN_NOT_REALTIME"
@@ -177,7 +184,7 @@ class ReuseControlManager:
         else:
             production_mode_label = "FULL_REALTIME_RECOMPUTE"
 
-        if core_policy_rejected_count > 0 or core_reused_count > 0 or core_failed_count > 0 or core_skipped_count > 0:
+        if core_policy_rejected_count > 0 or core_reused_count > 0 or core_failed_count > 0 or core_skipped_count > 0 or core_pending_count > 0:
             reuse_audit_status = "NOT_READY_FOR_FULL_REALTIME"
         elif reused_stage_count > 0:
             reuse_audit_status = "CORE_READY_NONCORE_REUSE"
@@ -197,10 +204,12 @@ class ReuseControlManager:
                 "repaired_stage_count": repaired_stage_count,
                 "failed_stage_count": failed_stage_count,
                 "skipped_stage_count": skipped_stage_count,
+                "pending_stage_count": pending_stage_count,
                 "core_stage_count": core_stage_count,
                 "core_reused_count": core_reused_count,
                 "core_failed_count": core_failed_count,
                 "core_skipped_count": core_skipped_count,
+                "core_pending_count": core_pending_count,
                 "core_policy_rejected_count": core_policy_rejected_count,
                 "core_success_executed_like_count": core_success_executed_like_count,
                 "core_realtime_coverage_ratio": core_realtime_coverage_ratio,
@@ -231,6 +240,7 @@ class ReuseControlManager:
             "reuse_violation_action": self.reuse_violation_action,
             "core_reused_count": core_reused_count,
             "core_policy_rejected_count": core_policy_rejected_count,
+            "core_pending_count": core_pending_count,
             "core_realtime_coverage_ratio": core_realtime_coverage_ratio,
             "output_csv_path": str(csv_path),
             "output_json_path": str(json_path),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -11,11 +12,15 @@ import pandas as pd
 
 BASE_DIR = r"C:\quant_system"
 ERROR_COLUMNS = ["code", "name", "signal_date", "route_a_signal", "reject_reason"]
+STAGE01_STATUS_PATH = "daily_candidates_status.json"
+STAGE02_STATUS_PATH = "daily_trade_plan_status.json"
+PENDING_STAGE_STATUS = {"NON_TRADING_DAY", "WAITING_MARKET_DATA", "DATA_STALE"}
 
 
 def _load_optional_settings():
     try:
         from config import settings  # type: ignore
+
         return settings
     except Exception:
         return None
@@ -53,6 +58,30 @@ def _build_plan_reason(code: str, signal_date: str, target_buy_price_base: float
     )
 
 
+def _read_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_stage02_status(reports_dir: Path, payload: Dict[str, Any]) -> None:
+    with open(reports_dir / STAGE02_STATUS_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _write_pending_outputs(reports_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    pd.DataFrame().to_csv(reports_dir / "daily_trade_plan_all.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame().to_csv(reports_dir / "daily_trade_plan_top10.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(columns=ERROR_COLUMNS).to_csv(reports_dir / "daily_trade_plan_errors.csv", index=False, encoding="utf-8-sig")
+    _write_stage02_status(reports_dir, payload)
+    return payload
+
+
 def run(
     trading_date: str,
     base_dir: str = BASE_DIR,
@@ -63,16 +92,48 @@ def run(
     reports_dir = Path(base_dir) / "reports"
     candidates_path = reports_dir / "daily_candidates_all.csv"
     errors_path = reports_dir / "daily_trade_plan_errors.csv"
+    stage01_status_payload = _read_json(reports_dir / STAGE01_STATUS_PATH)
+    upstream_status = str(stage01_status_payload.get("stage_status", "")).strip().upper()
+    upstream_reason = str(stage01_status_payload.get("error", "")).strip()
 
     if not candidates_path.exists():
-        return {"stage_status": "FAILED", "error": "缺少 daily_candidates_all.csv"}
+        if upstream_status in PENDING_STAGE_STATUS:
+            payload = {
+                "stage_status": upstream_status,
+                "success": False,
+                "trading_date": trading_date,
+                "error": upstream_reason or "Stage 01 尚未形成当日候选，交易计划层暂停执行。",
+                "blocked_by_stage": 1,
+            }
+            return _write_pending_outputs(reports_dir, payload)
+        payload = {"stage_status": "FAILED", "error": "缺少 daily_candidates_all.csv"}
+        _write_stage02_status(reports_dir, payload)
+        return payload
 
-    df = pd.read_csv(candidates_path, encoding="utf-8-sig")
+    try:
+        df = pd.read_csv(candidates_path, encoding="utf-8-sig")
+    except pd.errors.EmptyDataError:
+        df = pd.DataFrame()
     if df.empty:
-        return {"stage_status": "FAILED", "error": "候选文件为空，无法生成交易计划"}
+        if upstream_status in PENDING_STAGE_STATUS:
+            payload = {
+                "stage_status": upstream_status,
+                "success": False,
+                "trading_date": trading_date,
+                "error": upstream_reason or "Stage 01 尚未形成当日候选，交易计划层暂停执行。",
+                "blocked_by_stage": 1,
+            }
+            return _write_pending_outputs(reports_dir, payload)
+        payload = {"stage_status": "FAILED", "error": "候选文件为空，无法生成交易计划"}
+        _write_stage02_status(reports_dir, payload)
+        return payload
 
-    target_profit_pct = float(target_profit_pct if target_profit_pct is not None else _get_setting("TRADE_PLAN_TARGET_PROFIT_PCT", 0.08))
-    shadow_threshold = float(shadow_threshold if shadow_threshold is not None else _get_setting("TRADE_PLAN_SHADOW_THRESHOLD", 0.60))
+    target_profit_pct = float(
+        target_profit_pct if target_profit_pct is not None else _get_setting("TRADE_PLAN_TARGET_PROFIT_PCT", 0.08)
+    )
+    shadow_threshold = float(
+        shadow_threshold if shadow_threshold is not None else _get_setting("TRADE_PLAN_SHADOW_THRESHOLD", 0.60)
+    )
     capital = float(_get_setting("PORTFOLIO_CAPITAL", 1_000_000.0))
     max_plan_count = int(_get_setting("TRADE_PLAN_MAX_STOCKS", 10))
     max_single_position_pct = float(_get_setting("TRADE_PLAN_MAX_SINGLE_POSITION_PCT", 0.10))
@@ -121,13 +182,14 @@ def run(
     selected = work[work["route_a_signal"] & work["entry_valid"]].copy()
     if selected.empty:
         pd.DataFrame(error_records, columns=ERROR_COLUMNS).to_csv(errors_path, index=False, encoding="utf-8-sig")
-        return {"stage_status": "FAILED", "error": "没有 route_a_signal == True 且可生成 T+1 左侧接针计划的候选。"}
+        payload = {"stage_status": "FAILED", "error": "没有 route_a_signal == True 且可生成 T+1 左侧接针计划的候选。"}
+        _write_stage02_status(reports_dir, payload)
+        return payload
 
     selected = selected.sort_values(["rank", "score"], ascending=[True, False]).reset_index(drop=True).head(max_plan_count).copy()
-
     target_position_pct = min(max_single_position_pct, 1.0 / max_plan_count if max_plan_count > 0 else max_single_position_pct)
-    plans: list[dict[str, Any]] = []
 
+    plans: list[dict[str, Any]] = []
     for idx, row in selected.iterrows():
         code = row.get("code")
         signal_date = str(row.get("signal_date", ""))
@@ -206,13 +268,15 @@ def run(
     error_df.to_csv(errors_path, index=False, encoding="utf-8-sig")
 
     if df_plan.empty:
-        return {"stage_status": "FAILED", "error": "资金分配后，没有标的满足最低买入 1 手的约束。"}
+        payload = {"stage_status": "FAILED", "error": "资金分配后，没有标的满足最低买入 1 手的约束。"}
+        _write_stage02_status(reports_dir, payload)
+        return payload
 
     df_plan = df_plan.sort_values(["portfolio_rank", "score"], ascending=[True, False]).reset_index(drop=True)
     df_plan.to_csv(reports_dir / "daily_trade_plan_all.csv", index=False, encoding="utf-8-sig")
     df_plan.head(10).to_csv(reports_dir / "daily_trade_plan_top10.csv", index=False, encoding="utf-8-sig")
 
-    return {
+    payload = {
         "stage_status": "SUCCESS_EXECUTED",
         "success": True,
         "trading_date": trading_date,
@@ -221,6 +285,8 @@ def run(
         "target_profit_pct": float(target_profit_pct),
         "shadow_threshold": float(shadow_threshold),
     }
+    _write_stage02_status(reports_dir, payload)
+    return payload
 
 
 def main() -> None:

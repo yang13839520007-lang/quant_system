@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -11,6 +12,8 @@ import pandas as pd
 
 
 BASE_DIR = r"C:\quant_system"
+STAGE01_STATUS_PATH = "daily_candidates_status.json"
+PENDING_STAGE_STATUS = {"NON_TRADING_DAY", "WAITING_MARKET_DATA", "DATA_STALE"}
 
 try:
     import generate_market_signal_snapshot
@@ -21,6 +24,7 @@ except ImportError:  # pragma: no cover - defensive branch
 def _load_optional_settings():
     try:
         from config import settings  # type: ignore
+
         return settings
     except Exception:
         return None
@@ -56,7 +60,31 @@ def _normalize_code(code: Any) -> str:
         return text
     if digits.startswith(("600", "601", "603", "605", "688", "689")):
         return f"sh.{digits}"
-    if digits.startswith(("430", "831", "832", "833", "834", "835", "836", "837", "838", "839", "870", "871", "872", "873", "874", "875", "876", "877", "878", "879", "920")):
+    if digits.startswith(
+        (
+            "430",
+            "831",
+            "832",
+            "833",
+            "834",
+            "835",
+            "836",
+            "837",
+            "838",
+            "839",
+            "870",
+            "871",
+            "872",
+            "873",
+            "874",
+            "875",
+            "876",
+            "877",
+            "878",
+            "879",
+            "920",
+        )
+    ):
         return f"bj.{digits}"
     return f"sz.{digits}"
 
@@ -124,6 +152,135 @@ def _read_source_csv(path_str: str) -> pd.DataFrame:
         return pd.read_csv(path, encoding="utf-8-sig")
     except UnicodeDecodeError:
         return pd.read_csv(path, encoding="gbk")
+
+
+def _extract_max_date(df: pd.DataFrame, candidates: list[str]) -> str:
+    date_col = _pick_col(df, candidates)
+    if not date_col or date_col not in df.columns:
+        return ""
+
+    parsed = pd.to_datetime(df[date_col], errors="coerce")
+    if parsed.isna().all():
+        return ""
+    return str(parsed.max().strftime("%Y-%m-%d"))
+
+
+def _classify_data_pending_status(trading_date: str, latest_available_date: str) -> tuple[str, str]:
+    trading_ts = pd.to_datetime(trading_date, errors="coerce")
+    latest_ts = pd.to_datetime(latest_available_date, errors="coerce") if latest_available_date else pd.NaT
+
+    if pd.notna(trading_ts) and int(trading_ts.weekday()) >= 5:
+        latest_text = latest_available_date or "未知"
+        return "NON_TRADING_DAY", f"目标日期 {trading_date} 为非交易日，当前最新可用行情日期为 {latest_text}。"
+
+    if pd.isna(trading_ts):
+        return "WAITING_MARKET_DATA", f"目标日期 {trading_date} 无法解析，当前无法确认当日行情是否到齐。"
+
+    if pd.isna(latest_ts):
+        return "WAITING_MARKET_DATA", f"目标日期 {trading_date} 的行情尚未到齐，当前无法识别最新有效行情日期。"
+
+    gap_days = max(int((trading_ts - latest_ts).days), 0)
+    if gap_days <= 1:
+        return "WAITING_MARKET_DATA", f"目标日期 {trading_date} 的行情尚未到齐，当前最新可用行情日期为 {latest_available_date}。"
+    return "DATA_STALE", f"目标日期 {trading_date} 的行情明显滞后，当前最新可用行情日期仅到 {latest_available_date}。"
+
+
+def _write_stage01_status(reports_dir: Path, payload: Dict[str, Any]) -> None:
+    with open(reports_dir / STAGE01_STATUS_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _write_summary(
+    path: Path,
+    trading_date: str,
+    source_path: Path,
+    amount_min: float,
+    vol_shrink_ratio: float,
+    merged_count: int,
+    selected_count: int,
+    rejected_count: int,
+    stage_status: str = "",
+    note: str = "",
+    latest_available_date: str = "",
+) -> None:
+    lines = [
+        "============================================================",
+        "每日候选股生成摘要",
+        f"目标交易日: {trading_date}",
+        f"上游输入文件: {source_path}",
+        f"候选底池总数: {merged_count}",
+        f"入选总数: {selected_count}",
+        f"剔除总数: {rejected_count}",
+        "候选模式: Route A 强势股缩量回踩",
+        f"最低成交额门槛: {amount_min:.0f}",
+        f"缩量阈值比例: {vol_shrink_ratio:.2f}",
+        "过滤顺序: 非ST -> 非停牌 -> 流动性 -> RPS50可计算 -> RouteA 触发",
+        "排序规则: rps50 降序, ma20_bias 升序",
+    ]
+    if stage_status:
+        lines.append(f"阶段状态: {stage_status}")
+    if latest_available_date:
+        lines.append(f"最新有效行情日期: {latest_available_date}")
+    if note:
+        lines.append(f"说明: {note}")
+    lines.append("============================================================")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_pending_outputs(
+    reports_dir: Path,
+    trading_date: str,
+    source_path: Path,
+    amount_min: float,
+    vol_shrink_ratio: float,
+    merged_count: int,
+    stage_status: str,
+    reason: str,
+    latest_available_date: str,
+    snapshot_quality: str = "",
+    rejected_count: int | None = None,
+) -> Dict[str, Any]:
+    pd.DataFrame().to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame().to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(
+        [
+            {
+                "trading_date": trading_date,
+                "code": "",
+                "name": "",
+                "source_file": str(source_path),
+                "snapshot_quality": snapshot_quality,
+                "source_trade_date": latest_available_date,
+                "paused": snapshot_quality == "REPLAY_PROXY",
+                "is_st": False,
+                "reject_reason": stage_status,
+                "reject_stage": "DATA_WINDOW",
+            }
+        ]
+    ).to_csv(reports_dir / "daily_candidates_errors.csv", index=False, encoding="utf-8-sig")
+    _write_summary(
+        reports_dir / "daily_candidates_summary.txt",
+        trading_date=trading_date,
+        source_path=source_path,
+        amount_min=amount_min,
+        vol_shrink_ratio=vol_shrink_ratio,
+        merged_count=merged_count,
+        selected_count=0,
+        rejected_count=int(rejected_count if rejected_count is not None else merged_count),
+        stage_status=stage_status,
+        note=reason,
+        latest_available_date=latest_available_date,
+    )
+    payload = {
+        "stage_status": stage_status,
+        "success": False,
+        "trading_date": trading_date,
+        "error": reason,
+        "latest_available_date": latest_available_date,
+        "source_path": str(source_path),
+    }
+    _write_stage01_status(reports_dir, payload)
+    return payload
 
 
 def _extract_route_a_features(row: pd.Series, trading_date: str, base_dir: Path) -> tuple[dict[str, Any] | None, str]:
@@ -206,34 +363,6 @@ def _build_candidate_reason(row: pd.Series, vol_shrink_ratio: float) -> str:
     )
 
 
-def _write_summary(
-    path: Path,
-    trading_date: str,
-    source_path: Path,
-    amount_min: float,
-    vol_shrink_ratio: float,
-    merged_count: int,
-    selected_count: int,
-    rejected_count: int,
-) -> None:
-    lines = [
-        "============================================================",
-        "每日候选股生成摘要",
-        f"目标交易日: {trading_date}",
-        f"上游输入文件: {source_path}",
-        f"候选底池总数: {merged_count}",
-        f"入选总数: {selected_count}",
-        f"剔除总数: {rejected_count}",
-        "候选模式: Route A 强势股缩量回踩",
-        f"最低成交额门槛: {amount_min:.0f}",
-        f"缩量阈值比例: {vol_shrink_ratio:.2f}",
-        "过滤顺序: 非ST -> 非停牌 -> 流动性 -> RPS50可计算 -> RouteA 触发",
-        "排序规则: rps50 降序, ma20_bias 升序",
-        "============================================================",
-    ]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def run(
     trading_date: str,
     base_dir: str = BASE_DIR,
@@ -259,24 +388,67 @@ def run(
             base_dir=base_dir,
             candidate_path=str(backtest_path),
         )
+
     if not backtest_path.exists() or not snapshot_path.exists():
-        return {"stage_status": "FAILED", "error": f"缺少输入文件。底池:{backtest_path.exists()} 快照:{snapshot_path.exists()}"}
+        payload = {
+            "stage_status": "FAILED",
+            "error": f"缺少输入文件。底池:{backtest_path.exists()} 快照:{snapshot_path.exists()}",
+        }
+        _write_stage01_status(reports_dir, payload)
+        return payload
 
     df_backtest = pd.read_csv(backtest_path, encoding="utf-8-sig")
     df_snapshot = pd.read_csv(snapshot_path, encoding="utf-8-sig")
     print(f"    --> [DEBUG] 成功加载回测摘要: {len(df_backtest)} 行")
     print(f"    --> [DEBUG] 成功加载行情快照: {len(df_snapshot)} 行")
 
+    backtest_max_date = _extract_max_date(df_backtest, ["end_date", "trade_date", "date"])
+    snapshot_max_date = _extract_max_date(df_snapshot, ["source_trade_date", "trade_date", "date"])
+    latest_available_date = max([x for x in (backtest_max_date, snapshot_max_date) if x], default="")
+    all_snapshot_replay_proxy = bool(
+        not df_snapshot.empty
+        and "snapshot_quality" in df_snapshot.columns
+        and df_snapshot["snapshot_quality"].fillna("").astype(str).str.upper().eq("REPLAY_PROXY").all()
+    )
+
+    trading_ts = pd.to_datetime(trading_date, errors="coerce")
+    latest_ts = pd.to_datetime(latest_available_date, errors="coerce") if latest_available_date else pd.NaT
+    if (pd.notna(trading_ts) and pd.notna(latest_ts) and latest_ts < trading_ts) or all_snapshot_replay_proxy:
+        stage_status, reason = _classify_data_pending_status(trading_date, latest_available_date)
+        return _write_pending_outputs(
+            reports_dir=reports_dir,
+            trading_date=trading_date,
+            source_path=backtest_path,
+            amount_min=amount_min,
+            vol_shrink_ratio=vol_shrink_ratio,
+            merged_count=len(df_backtest),
+            stage_status=stage_status,
+            reason=reason,
+            latest_available_date=latest_available_date,
+            snapshot_quality="REPLAY_PROXY" if all_snapshot_replay_proxy else "",
+        )
+
     df_backtest["code"] = df_backtest["code"].map(_normalize_code)
     df_snapshot["code"] = df_snapshot["code"].map(_normalize_code)
     df = pd.merge(df_backtest, df_snapshot, on="code", how="inner")
     print(f"    --> [DEBUG] Inner Merge 匹配到的股票: {len(df)} 行")
     if df.empty:
-        return {"stage_status": "FAILED", "error": "快照与底池合并后，匹配结果为 0 行，请检查 code 字段格式是否一致。"}
+        payload = {
+            "stage_status": "FAILED",
+            "error": "快照与底池合并后，匹配结果为 0 行，请检查 code 字段格式是否一致。",
+        }
+        _write_stage01_status(reports_dir, payload)
+        return payload
 
-    df["name"] = df.get("name", "").fillna("").astype(str)
+    if "name" in df.columns:
+        df["name"] = df["name"].fillna("").astype(str)
+    else:
+        df["name"] = pd.Series([""] * len(df), index=df.index, dtype="object")
     df["is_st"] = df.apply(_is_st_flag, axis=1)
-    df["paused"] = df.get("paused", False).apply(_is_paused_flag)
+    if "paused" in df.columns:
+        df["paused"] = df["paused"].apply(_is_paused_flag)
+    else:
+        df["paused"] = False
 
     feature_records: list[dict[str, Any]] = []
     error_records: list[dict[str, Any]] = []
@@ -303,6 +475,28 @@ def run(
         error_df.to_csv(reports_dir / "daily_candidates_errors.csv", index=False, encoding="utf-8-sig")
         pd.DataFrame().to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
         pd.DataFrame().to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+
+        reason_set = {
+            str(value).strip()
+            for value in error_df.get("reject_reason", pd.Series(dtype=object)).tolist()
+            if str(value).strip()
+        }
+        if reason_set == {"NO_EXACT_TRADING_DATE_BAR"}:
+            stage_status, reason = _classify_data_pending_status(trading_date, latest_available_date)
+            return _write_pending_outputs(
+                reports_dir=reports_dir,
+                trading_date=trading_date,
+                source_path=backtest_path,
+                amount_min=amount_min,
+                vol_shrink_ratio=vol_shrink_ratio,
+                merged_count=len(df),
+                stage_status=stage_status,
+                reason=reason,
+                latest_available_date=latest_available_date,
+                snapshot_quality="REPLAY_PROXY" if all_snapshot_replay_proxy else "",
+                rejected_count=len(error_df),
+            )
+
         _write_summary(
             reports_dir / "daily_candidates_summary.txt",
             trading_date=trading_date,
@@ -313,10 +507,19 @@ def run(
             selected_count=0,
             rejected_count=len(error_df),
         )
-        return {"stage_status": "FAILED", "error": "候选特征构建失败，未形成有效 Route A 候选。"}
+        payload = {"stage_status": "FAILED", "error": "候选特征构建失败，未形成有效 Route A 候选。"}
+        _write_stage01_status(reports_dir, payload)
+        return payload
 
     df_feature = df.merge(feature_df, on=["code"], how="inner", suffixes=("", "_feature"))
-    for col in ("name_feature", "source_file_feature", "snapshot_quality_feature", "source_trade_date_feature", "paused_feature", "is_st_feature"):
+    for col in (
+        "name_feature",
+        "source_file_feature",
+        "snapshot_quality_feature",
+        "source_trade_date_feature",
+        "paused_feature",
+        "is_st_feature",
+    ):
         if col in df_feature.columns:
             base_col = col.replace("_feature", "")
             df_feature[base_col] = df_feature[col]
@@ -327,7 +530,6 @@ def run(
 
     reject_records: list[dict[str, Any]] = error_records.copy()
     selected_df = df_feature.copy()
-
     masks = {
         "ST_SECURITY_FILTERED": selected_df["is_st"].astype(bool),
         "PAUSED_SECURITY_FILTERED": selected_df["paused"].astype(bool),
@@ -379,7 +581,9 @@ def run(
             selected_count=0,
             rejected_count=len(error_df),
         )
-        return {"stage_status": "FAILED", "error": "所有标的均未通过 Route A 候选过滤。"}
+        payload = {"stage_status": "FAILED", "error": "所有标的均未通过 Route A 候选过滤。"}
+        _write_stage01_status(reports_dir, payload)
+        return payload
 
     selected_df["ma20_bias"] = pd.to_numeric(selected_df["ma20_bias"], errors="coerce").fillna(999.0)
     selected_df["route_a_signal"] = True
@@ -411,7 +615,7 @@ def run(
 
     print(f"    --> [DEBUG] Route A 最终候选数: {len(selected_df)}")
     print(f"    --> [DEBUG] 候选错误/剔除数: {len(error_df)}")
-    return {
+    payload = {
         "stage_status": "SUCCESS_EXECUTED",
         "success": True,
         "trading_date": trading_date,
@@ -420,6 +624,8 @@ def run(
         "amount_min": float(amount_min),
         "vol_shrink_ratio": float(vol_shrink_ratio),
     }
+    _write_stage01_status(reports_dir, payload)
+    return payload
 
 
 def main() -> None:

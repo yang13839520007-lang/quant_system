@@ -17,11 +17,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from core.stage_status import (
+    DATA_STALE,
     FAILED,
+    NON_TRADING_DAY,
     SKIPPED,
     SUCCESS_EXECUTED,
     SUCCESS_REPAIRED,
     SUCCESS_REUSED,
+    WAITING_MARKET_DATA,
     build_stage_status_counts,
     derive_run_mode_label,
     normalize_stage_status,
@@ -99,6 +102,7 @@ class PostRunAcceptanceManager:
             has_pseudo_unfilled_order=analysis["has_pseudo_unfilled_order"],
             close_loop_abnormal_amplified=analysis["close_loop_abnormal_amplified"],
             has_reused_stage=analysis["has_reused_stage"],
+            pending_status=analysis["pending_status"],
         )
 
         payload: Dict[str, Any] = {
@@ -131,6 +135,7 @@ class PostRunAcceptanceManager:
             "run_mode_label": run_mode_label,
             "has_failed_stage": analysis["has_failed_stage"],
             "has_reused_stage": analysis["has_reused_stage"],
+            "pending_status": analysis["pending_status"],
             "has_pseudo_unfilled_order": analysis["has_pseudo_unfilled_order"],
             "close_loop_abnormal_amplified": analysis["close_loop_abnormal_amplified"],
             "only_execution_slippage_left": analysis["only_execution_slippage_left"],
@@ -216,6 +221,11 @@ class PostRunAcceptanceManager:
             normalize_stage_status(row, row.get("stage_status")) == SUCCESS_REUSED
             for row in stage_results
         )
+        pending_status = ""
+        for candidate in (NON_TRADING_DAY, DATA_STALE, WAITING_MARKET_DATA):
+            if any(normalize_stage_status(row, row.get("stage_status")) == candidate for row in stage_results):
+                pending_status = candidate
+                break
 
         anomaly_base_df = attribution_df if not attribution_df.empty else anomalies_df
         anomaly_count = int(len(anomaly_base_df)) if not anomaly_base_df.empty else 0
@@ -241,6 +251,8 @@ class PostRunAcceptanceManager:
         return {
             "has_failed_stage": has_failed_stage,
             "has_reused_stage": has_reused_stage,
+            "pending_status": pending_status,
+            "has_pending_stage": bool(pending_status),
             "has_pseudo_unfilled_order": has_pseudo_unfilled_order,
             "close_loop_abnormal_amplified": close_loop_abnormal_amplified,
             "close_loop_abnormal_amplified_reason": amplified_reason,
@@ -410,9 +422,12 @@ class PostRunAcceptanceManager:
         has_pseudo_unfilled_order: bool,
         close_loop_abnormal_amplified: bool,
         has_reused_stage: bool,
+        pending_status: str = "",
     ) -> str:
         if has_failed_stage:
             return "REJECTED_FAILED_STAGE"
+        if pending_status:
+            return pending_status
         if has_pseudo_unfilled_order:
             return "REJECTED_PSEUDO_UNFILLED_ORDER"
         if close_loop_abnormal_amplified:
