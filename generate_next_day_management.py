@@ -75,6 +75,8 @@ class NextDayManagementGenerator:
             cost = float(row.get("avg_fill_price", 0.0))
             close_price = float(row.get("close_price", cost))
             pnl_pct = float(row.get("unrealized_pnl_pct", 0.0))
+            route_a_exit_signal = str(row.get("route_a_exit_signal", "")).strip()
+            exit_reason = str(row.get("exit_reason", "")).strip()
             
             # T+1 流转：假设前序文件缺少这些详细字段，这里做简单适配
             # 默认将今日复盘的持仓直接视为次日可用 (实盘中需结合真实流水与清算)
@@ -85,7 +87,11 @@ class NextDayManagementGenerator:
             action_reason = ""
             priority_score = 50.0
             
-            if pnl_pct >= self.take_profit_pct:
+            if route_a_exit_signal:
+                management_action = "次日开盘卖出"
+                action_reason = exit_reason or route_a_exit_signal
+                priority_score = 95.0
+            elif pnl_pct >= self.take_profit_pct:
                 management_action = "止盈卖出"
                 action_reason = f"浮盈 {pnl_pct*100:.2f}% 达标"
                 priority_score = 90.0
@@ -110,6 +116,8 @@ class NextDayManagementGenerator:
                 "close_price": close_price,
                 "unrealized_pnl_pct": round(pnl_pct, 4),
                 "hold_days": hold_days,
+                "route_a_exit_signal": route_a_exit_signal,
+                "exit_reason": exit_reason,
                 "management_action": management_action,
                 "management_priority_score": priority_score,
                 "action_reason": action_reason
@@ -135,6 +143,7 @@ class NextDayManagementGenerator:
             f"次日持仓续管生成完成 | 目标交易日: {trading_date}\n"
             f"待处理持仓数: {len(df_plan)}\n"
             f"建议卖出数  : {len(df_plan[df_plan['management_action'].str.contains('卖出')])}\n"
+            f"RouteA 卖出触发数: {len(df_plan[df_plan['route_a_exit_signal'].astype(str).str.strip() != ''])}\n"
             "============================================================"
         )
         summary_path.write_text(summary_text, encoding="utf-8")
@@ -153,6 +162,7 @@ class NextDayManagementGenerator:
         empty_df = pd.DataFrame(columns=[
             "trading_date", "code", "hold_qty", "available_qty", 
             "cost_price", "close_price", "unrealized_pnl_pct", "hold_days",
+            "route_a_exit_signal", "exit_reason",
             "management_action", "management_priority_score", "action_reason"
         ])
         empty_df.to_csv(self.reports_dir / "daily_next_day_management.csv", index=False, encoding="utf-8-sig")

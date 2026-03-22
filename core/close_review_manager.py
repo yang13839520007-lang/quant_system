@@ -308,6 +308,18 @@ class CloseReviewManager:
             errors="coerce",
         ).fillna(0.0)
         out["heat_level"] = _coalesce_col(df, ["heat_level", "heat", "signal_heat"], default="正常").astype(str)
+        out["signal_date"] = _coalesce_col(df, ["signal_date", "trade_date"], default="").astype(str)
+        out["entry_mode"] = _coalesce_col(df, ["entry_mode"], default="").astype(str)
+        out["stop_mode"] = _coalesce_col(df, ["stop_mode"], default="").astype(str)
+        out["route_a_signal"] = _coalesce_col(df, ["route_a_signal"], default=False)
+        out["target_profit_pct"] = pd.to_numeric(
+            _coalesce_col(df, ["target_profit_pct"], default=0),
+            errors="coerce",
+        ).fillna(0.0)
+        out["shadow_threshold"] = pd.to_numeric(
+            _coalesce_col(df, ["shadow_threshold"], default=0),
+            errors="coerce",
+        ).fillna(0.0)
 
         if source_name in {"daily_portfolio_plan_risk_checked.csv", "daily_portfolio_plan_top5.csv"}:
             out["source_position_type"] = "PLAN_FALLBACK"
@@ -342,6 +354,7 @@ class CloseReviewManager:
         snap["amount"] = pd.to_numeric(_coalesce_col(df, ["amount", "turnover"], default=None), errors="coerce")
         snap["snapshot_mode"] = _coalesce_col(df, ["snapshot_mode"], default="UNKNOWN").astype(str)
         snap["snapshot_quality"] = _coalesce_col(df, ["snapshot_quality"], default="UNKNOWN").astype(str)
+        snap["ma20"] = pd.to_numeric(_coalesce_col(df, ["ma20", "MA20"], default=None), errors="coerce")
 
         snap = snap[snap["code"] != ""].copy()
         snap = snap.drop_duplicates(subset=["code"], keep="first").reset_index(drop=True)
@@ -351,9 +364,10 @@ class CloseReviewManager:
         cols = [
             "execution_rank", "code", "filled_shares", "avg_fill_price", "close_price", "prev_close",
             "open_price", "high_price", "low_price", "stop_loss", "target_price", "market_change_pct",
-            "unrealized_pnl_amt", "unrealized_pnl_pct", "stop_loss_gap_pct", "target_gap_pct",
+            "unrealized_pnl_amt", "unrealized_pnl_pct", "stop_loss_gap_pct", "target_gap_pct", "ma20", "upper_shadow",
             "position_status", "next_day_action", "action", "score", "heat_level", "snapshot_mode",
-            "snapshot_quality", "source_position_type", "source_file",
+            "snapshot_quality", "source_position_type", "source_file", "signal_date", "entry_mode", "stop_mode",
+            "route_a_signal", "target_profit_pct", "shadow_threshold", "route_a_exit_signal", "exit_reason",
         ]
         return pd.DataFrame(columns=cols)
 
@@ -397,6 +411,10 @@ class CloseReviewManager:
         merged["target_gap_pct"] = (
             (merged["target_price"] - merged["close_price"]) / merged["target_price"] * 100.0
         ).where((merged["target_price"] > 0) & merged["close_price"].notna())
+        merged["upper_shadow"] = merged.apply(self._calc_upper_shadow, axis=1)
+        route_exit_df = merged.apply(self._calc_route_a_exit_fields, axis=1, result_type="expand")
+        route_exit_df.columns = ["route_a_exit_signal", "exit_reason"]
+        merged[["route_a_exit_signal", "exit_reason"]] = route_exit_df
 
         merged["position_status"] = merged.apply(self._calc_position_status, axis=1)
         merged["next_day_action"] = merged.apply(self._calc_next_day_action, axis=1)
@@ -406,9 +424,11 @@ class CloseReviewManager:
         ordered_cols = [
             "execution_rank", "code", "filled_shares", "avg_fill_price", "close_price", "prev_close",
             "open_price", "high_price", "low_price", "stop_loss", "target_price", "market_change_pct",
-            "unrealized_pnl_amt", "unrealized_pnl_pct", "stop_loss_gap_pct", "target_gap_pct",
+            "unrealized_pnl_amt", "unrealized_pnl_pct", "stop_loss_gap_pct", "target_gap_pct", "ma20", "upper_shadow",
             "position_status", "next_day_action", "action", "score", "heat_level", "snapshot_mode",
-            "snapshot_quality", "source_position_type", "source_file", "trade_date", "review_time",
+            "snapshot_quality", "source_position_type", "source_file", "signal_date", "entry_mode", "stop_mode",
+            "route_a_signal", "target_profit_pct", "shadow_threshold", "route_a_exit_signal", "exit_reason",
+            "trade_date", "review_time",
         ]
         for col in ordered_cols:
             if col not in merged.columns:
@@ -448,6 +468,10 @@ class CloseReviewManager:
         return "正常持有"
 
     def _calc_next_day_action(self, row: pd.Series) -> str:
+        route_a_exit_signal = str(row.get("route_a_exit_signal", "")).strip()
+        if route_a_exit_signal:
+            return "次日开盘卖出"
+
         status = str(row.get("position_status", "")).strip()
         snapshot_quality = str(row.get("snapshot_quality", "")).strip().upper()
         pnl_pct = _safe_float(row.get("unrealized_pnl_pct"), default=0)
@@ -470,6 +494,40 @@ class CloseReviewManager:
             return "弱留强汰"
         return "正常跟踪"
 
+    def _calc_upper_shadow(self, row: pd.Series) -> float:
+        high_price = _safe_float(row.get("high_price"), default=float("nan"))
+        low_price = _safe_float(row.get("low_price"), default=float("nan"))
+        open_price = _safe_float(row.get("open_price"), default=float("nan"))
+        close_price = _safe_float(row.get("close_price"), default=float("nan"))
+        if any(math.isnan(value) for value in [high_price, low_price, open_price, close_price]):
+            return 0.0
+        full_range = high_price - low_price
+        if full_range <= 0:
+            return 0.0
+        upper_shadow = high_price - max(open_price, close_price)
+        return round(max(upper_shadow, 0.0) / full_range, 4)
+
+    def _calc_route_a_exit_fields(self, row: pd.Series) -> Tuple[str, str]:
+        entry_mode = str(row.get("entry_mode", "")).strip().upper()
+        route_a_signal = str(row.get("route_a_signal", "")).strip().lower() in {"1", "true", "yes", "y"}
+        if entry_mode != "ROUTE_A_LEFT_CATCH" and not route_a_signal:
+            return "", ""
+
+        pnl_ratio = _safe_float(row.get("unrealized_pnl_pct"), default=0.0) / 100.0
+        target_profit_pct = _safe_float(row.get("target_profit_pct"), default=0.0)
+        shadow_threshold = _safe_float(row.get("shadow_threshold"), default=0.0)
+        upper_shadow = _safe_float(row.get("upper_shadow"), default=0.0)
+        close_price = _safe_float(row.get("close_price"), default=float("nan"))
+        ma20 = _safe_float(row.get("ma20"), default=float("nan"))
+
+        if target_profit_pct > 0 and pnl_ratio >= target_profit_pct:
+            return "TARGET_PROFIT_REACHED", f"收盘浮盈 {pnl_ratio:.2%} 达到目标收益阈值 {target_profit_pct:.2%}"
+        if pnl_ratio > 0 and shadow_threshold > 0 and upper_shadow >= shadow_threshold:
+            return "UPPER_SHADOW_WARNING", f"长上影比例 {upper_shadow:.2f} 超过阈值 {shadow_threshold:.2f} 且浮盈为正"
+        if not math.isnan(close_price) and not math.isnan(ma20) and ma20 > 0 and close_price < ma20:
+            return "CLOSE_BELOW_MA20", f"收盘价 {close_price:.2f} 跌破 MA20 {ma20:.2f}"
+        return "", ""
+
     def _build_watchlist(self, review_df: pd.DataFrame) -> pd.DataFrame:
         if review_df.empty:
             return review_df.copy()
@@ -478,6 +536,7 @@ class CloseReviewManager:
         out = review_df[
             (review_df["position_status"].isin(focus_status))
             | (review_df["next_day_action"].isin({"先校验快照再决策", "弱留强汰"}))
+            | (review_df["route_a_exit_signal"].astype(str).str.strip() != "")
         ].copy()
 
         out = out.sort_values(

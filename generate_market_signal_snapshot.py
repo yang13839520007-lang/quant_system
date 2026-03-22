@@ -207,8 +207,11 @@ def _derive_limit_prices(prev_close: float | None, limit_pct: float) -> tuple[fl
 
 
 def _search_source_file(project_root: Path, code: str) -> Path | None:
+    normalized_code = normalize_code(code)
     digits = normalize_code(code).split(".")[-1]
     candidates = [
+        project_root / "stock_data_5years" / f"{normalized_code}.csv",
+        project_root / "stock_data_5years" / f"{digits}.csv",
         project_root / "data" / "daily" / f"{digits}.csv",
         project_root / "data" / "daily_bar" / f"{digits}.csv",
         project_root / "data" / "stocks" / f"{digits}.csv",

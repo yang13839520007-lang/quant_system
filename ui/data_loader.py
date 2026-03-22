@@ -5,16 +5,19 @@ from datetime import datetime
 from pathlib import Path
 import json
 import logging
+import re
 from typing import Any
 
 import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 
 from ui.config import AppConfig, ReportSpec
+from ui.display_labels import get_message, get_page_label
 
 
 CSV_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
 TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
+CANDIDATES_SUMMARY_DATE_PATTERN = re.compile(r"目标交易日[:：]\s*(\d{4}-\d{2}-\d{2})")
 
 
 @dataclass
@@ -75,7 +78,7 @@ class ReportDataLoader:
         stage_status_page = self._load_page(
             ReportSpec(
                 key="stage_status",
-                title="主控阶段状态",
+                title=get_page_label("stage_status"),
                 csv_name="daily_orchestrator_stage_status.csv",
                 summary_name=None,
                 empty_message="阶段状态文件不存在/尚未生成",
@@ -128,6 +131,15 @@ class ReportDataLoader:
             else f"{csv_path.name} | 文件不存在/尚未生成 | {summary_status}"
         )
 
+        if spec.key == "candidates":
+            summary_text, status_text, file_status_text = self._align_candidates_summary(
+                dataframe=dataframe,
+                summary_text=summary_text,
+                status_text=status_text,
+                file_status_text=file_status_text,
+                summary_exists=bool(summary_path and summary_path.exists()),
+            )
+
         return PageData(
             spec=spec,
             csv_path=csv_path,
@@ -143,6 +155,32 @@ class ReportDataLoader:
             summary_exists=bool(summary_path and summary_path.exists()),
             last_modified_text=last_modified_text,
         )
+
+    def _align_candidates_summary(
+        self,
+        dataframe: pd.DataFrame,
+        summary_text: str,
+        status_text: str,
+        file_status_text: str,
+        summary_exists: bool,
+    ) -> tuple[str, str, str]:
+        if not summary_exists:
+            return summary_text, status_text, file_status_text
+
+        table_trade_date = self._extract_page_trade_date(dataframe)
+        summary_trade_date = self._extract_candidates_summary_date(summary_text)
+        if table_trade_date and summary_trade_date and table_trade_date == summary_trade_date:
+            return summary_text, status_text, file_status_text
+
+        warning_text = (
+            "摘要与当前交易日不一致。\n"
+            f"当前表格交易日：{table_trade_date or '无法识别'}\n"
+            f"摘要目标交易日：{summary_trade_date or '无法识别'}\n"
+            "为避免误读，当前候选页不展示旧摘要内容。"
+        )
+        updated_status = f"{status_text} 候选摘要与当前交易日不一致。".strip()
+        updated_file_status = f"{file_status_text} | 摘要交易日不一致"
+        return warning_text, updated_status, updated_file_status
 
     def _safe_read_csv(self, path: Path, missing_message: str) -> tuple[pd.DataFrame, str, str]:
         if not path.exists():
@@ -166,7 +204,7 @@ class ReportDataLoader:
                 break
 
         self.logger.warning("CSV 读取失败，降级为空表: %s | %s", path, last_error)
-        return pd.DataFrame(), f"读取失败，已降级为空表。请检查文件编码/列结构。{last_error}", last_error
+        return pd.DataFrame(), f"读取失败，已降级为空表。请检查文件编码或列结构。{last_error}", last_error
 
     def _safe_read_text(self, path: Path | None, missing_message: str) -> str:
         if path is None or not path.exists():
@@ -207,13 +245,31 @@ class ReportDataLoader:
                         return value
         return datetime.now().strftime("%Y-%m-%d")
 
+    def _extract_page_trade_date(self, dataframe: pd.DataFrame) -> str:
+        if dataframe.empty:
+            return ""
+        for column_name in ("trading_date", "trade_date", "date"):
+            if column_name in dataframe.columns:
+                value = str(dataframe.iloc[0][column_name]).strip()
+                if value and value.lower() != "nan":
+                    return value
+        return ""
+
+    def _extract_candidates_summary_date(self, summary_text: str) -> str:
+        if not summary_text:
+            return ""
+        match = CANDIDATES_SUMMARY_DATE_PATTERN.search(summary_text)
+        if not match:
+            return ""
+        return match.group(1).strip()
+
     def _describe_reports_dir(self, reports_dir: Path) -> tuple[int, str]:
         if not reports_dir.exists():
-            return 0, "reports 目录不存在"
+            return 0, "报表目录不存在"
 
         files = [item for item in reports_dir.iterdir() if item.is_file()]
         if not files:
-            return 0, "reports 目录存在，但当前没有报表文件"
+            return 0, "报表目录存在，但当前没有报表文件"
 
         latest_file = max(files, key=lambda item: item.stat().st_mtime)
         latest_text = f"{latest_file.name} @ {self._format_timestamp(latest_file)}"
@@ -228,7 +284,7 @@ class ReportDataLoader:
         dataframe = stage_status_page.dataframe
         if "stage_status" in dataframe.columns and not dataframe.empty:
             return str(dataframe.iloc[-1]["stage_status"])
-        return "未运行"
+        return "NOT_RUN"
 
     def _resolve_current_stage(self, summary_json: dict[str, Any], stage_status_page: PageData) -> str:
         dataframe = stage_status_page.dataframe
@@ -252,14 +308,14 @@ class ReportDataLoader:
         stage_status_page: PageData,
     ) -> str:
         if not reports_dir_exists:
-            return "reports 目录不存在，界面已降级为空白监控模式"
+            return get_message("reports_missing_mode", "未找到报表目录，已进入空白监控模式")
 
         if self._count_failed_stages(summary_json, stage_status_page) > 0:
-            return "主控存在失败阶段，请检查摘要/日志页"
+            return "主控存在失败阶段，请查看摘要/日志页"
 
         page_errors = [page.spec.title for page in pages.values() if page.load_error]
         if page_errors:
-            return f"以下页面读取降级为空表: {', '.join(page_errors)}"
+            return f"以下页面读取降级为空表：{', '.join(page_errors)}"
         return "正常"
 
     def _count_failed_stages(self, summary_json: dict[str, Any], stage_status_page: PageData) -> int:

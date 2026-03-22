@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import locale
+import os
 from pathlib import Path
 import logging
 import re
@@ -9,9 +11,11 @@ import threading
 from PySide6.QtCore import QObject, QThread, Signal
 
 from ui.config import AppConfig
+from ui.display_labels import format_status_text
 
 
 STAGE_PATTERN = re.compile(r"\[Stage\s+(?P<stage_no>\d+)\]\s+(?P<stage_name>.+?)\s+->\s+(?P<status>[A-Z_]+)")
+FALLBACK_ENCODINGS = ("utf-8", "gbk", "cp936")
 
 
 class OrchestratorWorker(QObject):
@@ -35,19 +39,18 @@ class OrchestratorWorker(QObject):
                 cwd=str(self.workdir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
+                text=False,
+                bufsize=0,
+                env=self._build_process_env(),
             )
         except FileNotFoundError as exc:
             target = exc.filename or self.command[0]
-            message = f"无法启动主控，找不到可执行文件: {target}"
+            message = f"无法启动主控，找不到可执行文件：{target}"
             self.logger.exception(message)
             self.finished.emit(False, -1, message)
             return
         except Exception as exc:  # pragma: no cover - defensive branch
-            message = f"无法启动主控进程: {exc}"
+            message = f"无法启动主控进程：{exc}"
             self.logger.exception(message)
             self.finished.emit(False, -1, message)
             return
@@ -55,8 +58,8 @@ class OrchestratorWorker(QObject):
         def consume(stream, prefix: str) -> None:
             if stream is None:
                 return
-            for raw_line in iter(stream.readline, ""):
-                line = raw_line.rstrip()
+            for raw_line in iter(stream.readline, b""):
+                line = self._decode_output_line(raw_line)
                 if not line:
                     continue
                 payload = f"[{prefix}] {line}"
@@ -77,12 +80,27 @@ class OrchestratorWorker(QObject):
         self.logger.info(message)
         self.finished.emit(success, exit_code, message)
 
+    def _build_process_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        # Prefer UTF-8 for the Python child process, but keep decode fallback on the parent side.
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+        return env
+
+    def _decode_output_line(self, raw_line: bytes) -> str:
+        for encoding in _candidate_encodings():
+            try:
+                return raw_line.decode(encoding).rstrip("\r\n")
+            except UnicodeDecodeError:
+                continue
+        return raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+
     def _emit_stage_if_needed(self, line: str) -> None:
         match = STAGE_PATTERN.search(line)
         if not match:
             return
         stage_name = match.group("stage_name").strip()
-        status = match.group("status").strip()
+        status = format_status_text(match.group("status").strip())
         self.stage_changed.emit(f"{stage_name} / {status}")
 
 
@@ -115,13 +133,13 @@ class OrchestratorRunner(QObject):
         interpreter_path = Path(self.config.python_executable)
         if not interpreter_path.exists():
             self.start_rejected.emit(
-                f"Python 解释器不存在: {interpreter_path}。请检查 ui/ui_config.toml 的 python_executable。"
+                f"Python 解释器不存在：{interpreter_path}。请检查 ui/ui_config.toml 的 python_executable。"
             )
             return False
 
         if not self.config.orchestrator_entry.exists():
             self.start_rejected.emit(
-                f"主控桥接入口不存在: {self.config.orchestrator_entry}。请检查 ui/ui_config.toml 的 orchestrator_entry。"
+                f"主控桥接入口不存在：{self.config.orchestrator_entry}。请检查 ui/ui_config.toml 的 orchestrator_entry。"
             )
             return False
 
@@ -160,3 +178,13 @@ class OrchestratorRunner(QObject):
             self._thread.deleteLater()
         self._worker = None
         self._thread = None
+
+
+def _candidate_encodings() -> tuple[str, ...]:
+    preferred = locale.getpreferredencoding(False).strip().lower()
+    encodings: list[str] = []
+    for encoding in (*FALLBACK_ENCODINGS, preferred):
+        normalized = encoding.strip().lower()
+        if normalized and normalized not in encodings:
+            encodings.append(normalized)
+    return tuple(encodings)

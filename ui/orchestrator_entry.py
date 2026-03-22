@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 
+def _configure_stdio() -> None:
+    # Keep the UI-side subprocess output predictable on Windows consoles.
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(description="Launch the existing orchestrator from the UI layer.")
     parser.add_argument("--project-root", required=True, help="Project root directory.")
     parser.add_argument("--trading-date", required=True, help="Trading date in YYYY-MM-DD.")

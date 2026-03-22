@@ -41,7 +41,7 @@ class AlertManager(QObject):
                     code="reports_dir_missing",
                     severity="warning",
                     title="报表目录未就绪",
-                    message="reports 目录不存在，界面已按空白监控模式启动。",
+                    message="报表目录不存在，界面已按空白监控模式启动。",
                 )
             )
 
@@ -64,7 +64,7 @@ class AlertManager(QObject):
                     AlertRecord(
                         code="buy_signal",
                         severity="info",
-                        title="可执行买入信号提醒",
+                        title="可执行买入提醒",
                         message=f"开盘执行委托中检测到 {buy_count} 条买入信号。",
                     )
                 )
@@ -79,8 +79,8 @@ class AlertManager(QObject):
                 AlertRecord(
                     code="risk_keyword",
                     severity="warning",
-                    title="止损/止盈关键词提醒",
-                    message=f"检测到关键词: {', '.join(keyword_hits[:4])}",
+                    title="止损/止盈提醒",
+                    message=f"检测到关键词：{', '.join(keyword_hits[:4])}",
                 )
             )
 
@@ -105,7 +105,7 @@ class AlertManager(QObject):
                     code="report_read_error",
                     severity="error",
                     title="报表读取异常",
-                    message=f"以下页面读取失败后已降级为空表: {', '.join(degraded_pages)}",
+                    message=f"以下页面读取失败后已降级为空表：{', '.join(degraded_pages)}",
                 )
             )
 

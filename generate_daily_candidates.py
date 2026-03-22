@@ -1,91 +1,446 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Mar 20 14:26:44 2026
-
-@author: DELL
-"""
-
-# -*- coding: utf-8 -*-
 from __future__ import annotations
+
+import argparse
 import sys
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
+
 import pandas as pd
+
 
 BASE_DIR = r"C:\quant_system"
 
 try:
     import generate_market_signal_snapshot
-except ImportError:
+except ImportError:  # pragma: no cover - defensive branch
     generate_market_signal_snapshot = None
 
-def run(trading_date: str, base_dir: str = BASE_DIR) -> Dict:
-    print(f"    --> [DEBUG] Stage 01 进入 run() 方法，日期: {trading_date}")
-    reports_dir = Path(base_dir) / "reports"
-    
-    if generate_market_signal_snapshot and hasattr(generate_market_signal_snapshot, "run"):
-        print("    --> [DEBUG] 正在拉起快照补数...")
-        generate_market_signal_snapshot.run(trading_date=trading_date, base_dir=base_dir)
 
+def _load_optional_settings():
+    try:
+        from config import settings  # type: ignore
+        return settings
+    except Exception:
+        return None
+
+
+def _get_setting(name: str, default: Any) -> Any:
+    settings = _load_optional_settings()
+    if settings is not None and hasattr(settings, name):
+        return getattr(settings, name)
+    return default
+
+
+def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    lower_map = {str(col).strip().lower(): col for col in df.columns}
+    for candidate in candidates:
+        hit = lower_map.get(candidate.strip().lower())
+        if hit is not None:
+            return hit
+    return None
+
+
+def _normalize_code(code: Any) -> str:
+    text = str(code).strip().lower()
+    if "." in text:
+        left, right = text.split(".", 1)
+        if left in {"sh", "sz", "bj"}:
+            return f"{left}.{right}"
+        if right in {"sh", "sz", "bj"}:
+            return f"{right}.{left}"
+
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) != 6:
+        return text
+    if digits.startswith(("600", "601", "603", "605", "688", "689")):
+        return f"sh.{digits}"
+    if digits.startswith(("430", "831", "832", "833", "834", "835", "836", "837", "838", "839", "870", "871", "872", "873", "874", "875", "876", "877", "878", "879", "920")):
+        return f"bj.{digits}"
+    return f"sz.{digits}"
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+        if pd.isna(out):
+            return None
+        return out
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_st_flag(row: pd.Series) -> bool:
+    for column_name in ("is_st", "st_flag"):
+        if column_name in row.index:
+            value = row.get(column_name)
+            if isinstance(value, bool):
+                return value
+            text = str(value).strip().lower()
+            if text in {"1", "true", "yes", "y"}:
+                return True
+            if text in {"0", "false", "no", "n"}:
+                return False
+
+    name = str(row.get("name", "") or "").upper().replace(" ", "")
+    return "ST" in name
+
+
+def _is_paused_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _resolve_source_path(row: pd.Series, base_dir: Path) -> Path | None:
+    source_file = str(row.get("source_file", "") or "").strip()
+    if source_file:
+        path = Path(source_file)
+        if not path.is_absolute():
+            path = (base_dir / path).resolve()
+        if path.exists():
+            return path
+
+    file_name = str(row.get("file_name", "") or "").strip()
+    if file_name:
+        path = base_dir / "stock_data_5years" / file_name
+        if path.exists():
+            return path
+
+    code = _normalize_code(row.get("code", ""))
+    if code:
+        path = base_dir / "stock_data_5years" / f"{code}.csv"
+        if path.exists():
+            return path
+    return None
+
+
+@lru_cache(maxsize=16384)
+def _read_source_csv(path_str: str) -> pd.DataFrame:
+    path = Path(path_str)
+    try:
+        return pd.read_csv(path, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return pd.read_csv(path, encoding="gbk")
+
+
+def _extract_route_a_features(row: pd.Series, trading_date: str, base_dir: Path) -> tuple[dict[str, Any] | None, str]:
+    source_path = _resolve_source_path(row, base_dir)
+    if source_path is None:
+        return None, "SOURCE_FILE_NOT_FOUND"
+
+    try:
+        source_df = _read_source_csv(str(source_path)).copy()
+    except Exception as exc:
+        return None, f"SOURCE_FILE_READ_ERROR:{exc}"
+
+    date_col = _pick_col(source_df, ["date", "trade_date", "trading_date", "datetime", "dt"])
+    close_col = _pick_col(source_df, ["close", "close_price", "latest_price"])
+    volume_col = _pick_col(source_df, ["volume", "vol"])
+    amount_col = _pick_col(source_df, ["amount", "turnover", "turnover_amount"])
+    if not date_col or not close_col or not volume_col or not amount_col:
+        return None, "MISSING_PRICE_COLUMNS"
+
+    source_df[date_col] = pd.to_datetime(source_df[date_col], errors="coerce")
+    source_df = source_df[source_df[date_col].notna()].copy()
+    if source_df.empty:
+        return None, "EMPTY_SOURCE_DATA"
+
+    source_df = source_df.sort_values(date_col).reset_index(drop=True)
+    source_df["trade_date"] = source_df[date_col].dt.strftime("%Y-%m-%d")
+    source_df = source_df[source_df["trade_date"] <= trading_date].copy()
+    if source_df.empty:
+        return None, "NO_HISTORY_BEFORE_TRADING_DATE"
+
+    exact_df = source_df[source_df["trade_date"] == trading_date].copy()
+    if exact_df.empty:
+        return None, "NO_EXACT_TRADING_DATE_BAR"
+
+    source_df["close_num"] = pd.to_numeric(source_df[close_col], errors="coerce")
+    source_df["volume_num"] = pd.to_numeric(source_df[volume_col], errors="coerce")
+    source_df["amount_num"] = pd.to_numeric(source_df[amount_col], errors="coerce")
+    source_df["ma5"] = source_df["close_num"].rolling(5, min_periods=5).mean()
+    source_df["ma20"] = source_df["close_num"].rolling(20, min_periods=20).mean()
+    source_df["vol_ma5"] = source_df["volume_num"].rolling(5, min_periods=5).mean()
+    source_df["close_shift_50"] = source_df["close_num"].shift(50)
+
+    feature_row = source_df.iloc[-1]
+    close_value = _safe_float(feature_row["close_num"])
+    amount_value = _safe_float(feature_row["amount_num"])
+    ma5_value = _safe_float(feature_row["ma5"])
+    ma20_value = _safe_float(feature_row["ma20"])
+    vol_ma5_value = _safe_float(feature_row["vol_ma5"])
+    volume_value = _safe_float(feature_row["volume_num"])
+    close_shift_50_value = _safe_float(feature_row["close_shift_50"])
+
+    if close_value is None or amount_value is None or ma5_value is None or ma20_value is None or vol_ma5_value is None or volume_value is None:
+        return None, "INSUFFICIENT_MA_OR_VOLUME_HISTORY"
+    if close_shift_50_value is None or close_shift_50_value <= 0:
+        return None, "INSUFFICIENT_RPS50_HISTORY"
+
+    ma20_bias = abs(close_value - ma20_value) / ma20_value if ma20_value > 0 else None
+    close_return_50 = close_value / close_shift_50_value - 1.0
+    return (
+        {
+            "feature_trade_date": str(feature_row["trade_date"]),
+            "close_price": round(close_value, 4),
+            "amount": float(amount_value),
+            "turnover_amount": float(amount_value),
+            "volume": float(volume_value),
+            "ma5": round(ma5_value, 4),
+            "ma20": round(ma20_value, 4),
+            "vol_ma5": round(vol_ma5_value, 4),
+            "ma20_bias": round(float(ma20_bias), 6) if ma20_bias is not None else None,
+            "close_return_50": float(close_return_50),
+        },
+        "",
+    )
+
+
+def _build_candidate_reason(row: pd.Series, vol_shrink_ratio: float) -> str:
+    return (
+        f"RouteA 强势股缩量回踩: close={row['close_price']:.2f} > ma20={row['ma20']:.2f}, "
+        f"close < ma5={row['ma5']:.2f}, volume={row['volume']:.0f} < vol_ma5*ratio={row['vol_ma5'] * vol_shrink_ratio:.0f}"
+    )
+
+
+def _write_summary(
+    path: Path,
+    trading_date: str,
+    source_path: Path,
+    amount_min: float,
+    vol_shrink_ratio: float,
+    merged_count: int,
+    selected_count: int,
+    rejected_count: int,
+) -> None:
+    lines = [
+        "============================================================",
+        "每日候选股生成摘要",
+        f"目标交易日: {trading_date}",
+        f"上游输入文件: {source_path}",
+        f"候选底池总数: {merged_count}",
+        f"入选总数: {selected_count}",
+        f"剔除总数: {rejected_count}",
+        "候选模式: Route A 强势股缩量回踩",
+        f"最低成交额门槛: {amount_min:.0f}",
+        f"缩量阈值比例: {vol_shrink_ratio:.2f}",
+        "过滤顺序: 非ST -> 非停牌 -> 流动性 -> RPS50可计算 -> RouteA 触发",
+        "排序规则: rps50 降序, ma20_bias 升序",
+        "============================================================",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run(
+    trading_date: str,
+    base_dir: str = BASE_DIR,
+    amount_min: float | None = None,
+    vol_shrink_ratio: float | None = None,
+) -> Dict[str, Any]:
+    print(f"    --> [DEBUG] Stage 01 候选层开始，日期: {trading_date}")
+    base_path = Path(base_dir)
+    reports_dir = base_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
     backtest_path = reports_dir / "batch_backtest_summary.csv"
     snapshot_path = reports_dir / "market_signal_snapshot.csv"
 
+    amount_min = float(amount_min if amount_min is not None else _get_setting("DAILY_CANDIDATES_AMOUNT_MIN", 2e8))
+    vol_shrink_ratio = float(
+        vol_shrink_ratio if vol_shrink_ratio is not None else _get_setting("DAILY_CANDIDATES_VOL_SHRINK_RATIO", 0.8)
+    )
+
+    if generate_market_signal_snapshot and hasattr(generate_market_signal_snapshot, "run"):
+        print("    --> [DEBUG] 正在拉起快照补数...")
+        generate_market_signal_snapshot.run(
+            trading_date=trading_date,
+            base_dir=base_dir,
+            candidate_path=str(backtest_path),
+        )
     if not backtest_path.exists() or not snapshot_path.exists():
         return {"stage_status": "FAILED", "error": f"缺少输入文件。底池:{backtest_path.exists()} 快照:{snapshot_path.exists()}"}
 
-    df_backtest = pd.read_csv(backtest_path)
-    df_snapshot = pd.read_csv(snapshot_path)
+    df_backtest = pd.read_csv(backtest_path, encoding="utf-8-sig")
+    df_snapshot = pd.read_csv(snapshot_path, encoding="utf-8-sig")
     print(f"    --> [DEBUG] 成功加载回测摘要: {len(df_backtest)} 行")
     print(f"    --> [DEBUG] 成功加载行情快照: {len(df_snapshot)} 行")
 
+    df_backtest["code"] = df_backtest["code"].map(_normalize_code)
+    df_snapshot["code"] = df_snapshot["code"].map(_normalize_code)
     df = pd.merge(df_backtest, df_snapshot, on="code", how="inner")
     print(f"    --> [DEBUG] Inner Merge 匹配到的股票: {len(df)} 行")
-    
     if df.empty:
-         return {"stage_status": "FAILED", "error": "快照与底池合并后，匹配结果为 0 行，请检查 code 字段格式是否一致(例如 sh.600000)"}
+        return {"stage_status": "FAILED", "error": "快照与底池合并后，匹配结果为 0 行，请检查 code 字段格式是否一致。"}
 
-    req_cols = ["close_price", "ma10", "ma20", "turnover_amount"]
-    missing = [c for c in req_cols if c not in df.columns]
-    if missing:
-        return {"stage_status": "FAILED", "error": f"合并后缺失行情字段: {missing}"}
+    df["name"] = df.get("name", "").fillna("").astype(str)
+    df["is_st"] = df.apply(_is_st_flag, axis=1)
+    df["paused"] = df.get("paused", False).apply(_is_paused_flag)
 
-    df_valid = df.dropna(subset=req_cols).copy()
-    print(f"    --> [DEBUG] 去除 NaN 行情后剩余: {len(df_valid)} 行")
-    if df_valid.empty:
-        return {"stage_status": "FAILED", "error": "去除行情 NaN 缺失值后，有效候选为 0。"}
+    feature_records: list[dict[str, Any]] = []
+    error_records: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        feature_payload, feature_error = _extract_route_a_features(row=row, trading_date=trading_date, base_dir=base_path)
+        base_record = {
+            "trading_date": trading_date,
+            "code": row.get("code", ""),
+            "name": row.get("name", ""),
+            "source_file": row.get("source_file", ""),
+            "snapshot_quality": row.get("snapshot_quality", ""),
+            "source_trade_date": row.get("source_trade_date", ""),
+            "paused": row.get("paused", False),
+            "is_st": row.get("is_st", False),
+        }
+        if feature_payload is None:
+            error_records.append({**base_record, "reject_reason": feature_error, "reject_stage": "FEATURE_BUILD"})
+            continue
+        feature_records.append({**base_record, **feature_payload})
 
-    trend_pass = (df_valid["ma10"] > df_valid["ma20"]) & (df_valid["close_price"] > df_valid["ma20"])
-    df_trend = df_valid[trend_pass].copy()
-    print(f"    --> [DEBUG] 通过 10/20 主趋势过滤剩余: {len(df_trend)} 行")
+    feature_df = pd.DataFrame(feature_records)
+    if feature_df.empty:
+        error_df = pd.DataFrame(error_records)
+        error_df.to_csv(reports_dir / "daily_candidates_errors.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+        _write_summary(
+            reports_dir / "daily_candidates_summary.txt",
+            trading_date=trading_date,
+            source_path=backtest_path,
+            amount_min=amount_min,
+            vol_shrink_ratio=vol_shrink_ratio,
+            merged_count=len(df),
+            selected_count=0,
+            rejected_count=len(error_df),
+        )
+        return {"stage_status": "FAILED", "error": "候选特征构建失败，未形成有效 Route A 候选。"}
 
-    liquidity_pass = df_trend["turnover_amount"] >= 5e7
-    df_candidates = df_trend[liquidity_pass].copy()
-    print(f"    --> [DEBUG] 通过 5000万 成交额过滤剩余: {len(df_candidates)} 行")
+    df_feature = df.merge(feature_df, on=["code"], how="inner", suffixes=("", "_feature"))
+    for col in ("name_feature", "source_file_feature", "snapshot_quality_feature", "source_trade_date_feature", "paused_feature", "is_st_feature"):
+        if col in df_feature.columns:
+            base_col = col.replace("_feature", "")
+            df_feature[base_col] = df_feature[col]
+            df_feature = df_feature.drop(columns=[col])
 
-    if df_candidates.empty:
-        return {"stage_status": "FAILED", "error": "所有标的均未通过 10/20 趋势或流动性过滤。"}
+    returns_rank = df_feature["close_return_50"].rank(pct=True, method="average")
+    df_feature["rps50"] = returns_rank.round(6)
 
-    if "total_return_pct" in df_candidates.columns:
-        df_candidates = df_candidates.sort_values(by="total_return_pct", ascending=False)
-    else:
-        df_candidates = df_candidates.sort_values(by="turnover_amount", ascending=False)
+    reject_records: list[dict[str, Any]] = error_records.copy()
+    selected_df = df_feature.copy()
 
-    df_candidates["rank"] = range(1, len(df_candidates) + 1)
-    df_candidates["score"] = 100.0 - df_candidates["rank"]
-    df_candidates["heat_level"] = "正常"
-    df_candidates["action"] = "正常跟踪"
+    masks = {
+        "ST_SECURITY_FILTERED": selected_df["is_st"].astype(bool),
+        "PAUSED_SECURITY_FILTERED": selected_df["paused"].astype(bool),
+        "AMOUNT_BELOW_MIN": pd.to_numeric(selected_df["amount"], errors="coerce").fillna(0.0) < amount_min,
+        "ROUTE_A_CONDITION_FAILED": ~(
+            (pd.to_numeric(selected_df["close_price"], errors="coerce") > pd.to_numeric(selected_df["ma20"], errors="coerce"))
+            & (pd.to_numeric(selected_df["close_price"], errors="coerce") < pd.to_numeric(selected_df["ma5"], errors="coerce"))
+            & (
+                pd.to_numeric(selected_df["volume"], errors="coerce")
+                < pd.to_numeric(selected_df["vol_ma5"], errors="coerce") * float(vol_shrink_ratio)
+            )
+        ),
+    }
 
-    df_candidates.to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
-    df_candidates.head(20).to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+    for reason, mask in masks.items():
+        aligned_mask = mask.reindex(selected_df.index, fill_value=False)
+        rejected = selected_df[aligned_mask].copy()
+        if not rejected.empty:
+            reject_records.extend(
+                rejected.assign(reject_reason=reason, reject_stage="FILTER")[
+                    [
+                        "trading_date",
+                        "code",
+                        "name",
+                        "source_file",
+                        "snapshot_quality",
+                        "source_trade_date",
+                        "paused",
+                        "is_st",
+                        "reject_reason",
+                        "reject_stage",
+                    ]
+                ].to_dict(orient="records")
+            )
+        selected_df = selected_df[~aligned_mask].copy()
 
-    return {"stage_status": "SUCCESS_EXECUTED", "success": True}
+    if selected_df.empty:
+        error_df = pd.DataFrame(reject_records)
+        error_df.to_csv(reports_dir / "daily_candidates_errors.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+        _write_summary(
+            reports_dir / "daily_candidates_summary.txt",
+            trading_date=trading_date,
+            source_path=backtest_path,
+            amount_min=amount_min,
+            vol_shrink_ratio=vol_shrink_ratio,
+            merged_count=len(df),
+            selected_count=0,
+            rejected_count=len(error_df),
+        )
+        return {"stage_status": "FAILED", "error": "所有标的均未通过 Route A 候选过滤。"}
 
-def main():
-    res = run(trading_date="2026-03-17")
+    selected_df["ma20_bias"] = pd.to_numeric(selected_df["ma20_bias"], errors="coerce").fillna(999.0)
+    selected_df["route_a_signal"] = True
+    selected_df["candidate_reason"] = selected_df.apply(lambda row: _build_candidate_reason(row, vol_shrink_ratio), axis=1)
+    selected_df = selected_df.sort_values(["rps50", "ma20_bias"], ascending=[False, True]).reset_index(drop=True)
+    selected_df["rank"] = range(1, len(selected_df) + 1)
+    selected_df["score"] = (
+        (pd.to_numeric(selected_df["rps50"], errors="coerce").fillna(0.0) * 100.0)
+        - (pd.to_numeric(selected_df["ma20_bias"], errors="coerce").fillna(0.0) * 100.0)
+    ).round(2)
+    selected_df["score"] = selected_df["score"].clip(lower=0.0)
+    selected_df["heat_level"] = "正常"
+    selected_df["action"] = "正常跟踪"
+
+    error_df = pd.DataFrame(reject_records)
+    selected_df.to_csv(reports_dir / "daily_candidates_all.csv", index=False, encoding="utf-8-sig")
+    selected_df.head(20).to_csv(reports_dir / "daily_candidates_top20.csv", index=False, encoding="utf-8-sig")
+    error_df.to_csv(reports_dir / "daily_candidates_errors.csv", index=False, encoding="utf-8-sig")
+    _write_summary(
+        reports_dir / "daily_candidates_summary.txt",
+        trading_date=trading_date,
+        source_path=backtest_path,
+        amount_min=amount_min,
+        vol_shrink_ratio=vol_shrink_ratio,
+        merged_count=len(df),
+        selected_count=len(selected_df),
+        rejected_count=len(error_df),
+    )
+
+    print(f"    --> [DEBUG] Route A 最终候选数: {len(selected_df)}")
+    print(f"    --> [DEBUG] 候选错误/剔除数: {len(error_df)}")
+    return {
+        "stage_status": "SUCCESS_EXECUTED",
+        "success": True,
+        "trading_date": trading_date,
+        "candidate_count": int(len(selected_df)),
+        "rejected_count": int(len(error_df)),
+        "amount_min": float(amount_min),
+        "vol_shrink_ratio": float(vol_shrink_ratio),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Route A 候选股生成层")
+    parser.add_argument("--trading-date", required=True)
+    parser.add_argument("--base-dir", default=BASE_DIR)
+    parser.add_argument("--amount-min", type=float, default=None)
+    parser.add_argument("--vol-shrink-ratio", type=float, default=None)
+    args, _ = parser.parse_known_args()
+
+    res = run(
+        trading_date=args.trading_date,
+        base_dir=args.base_dir,
+        amount_min=args.amount_min,
+        vol_shrink_ratio=args.vol_shrink_ratio,
+    )
     if res.get("stage_status") == "FAILED":
         print(f"ERROR: {res.get('error')}")
         sys.exit(1)
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

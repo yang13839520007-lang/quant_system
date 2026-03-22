@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from ui.alert_manager import AlertManager
 from ui.config import AppConfig
 from ui.data_loader import DashboardSnapshot
+from ui.display_labels import format_status_text, get_message, get_page_label
 from ui.log_manager import LogManager
 from ui.orchestrator_runner import OrchestratorRunner
 from ui.refresh_worker import SnapshotRefreshWorker
@@ -40,8 +41,8 @@ class MainWindow(QMainWindow):
         self.runner = OrchestratorRunner(config=config, logger=self.logger)
         self.alert_manager = AlertManager(logger=self.logger, parent=self)
         self.snapshot: DashboardSnapshot | None = None
-        self.runner_stage_text = "未运行"
-        self.runner_status_text = "空闲"
+        self.runner_stage_text = format_status_text("NOT_RUN")
+        self.runner_status_text = get_message("runner_idle", "空闲")
         self._refresh_thread: QThread | None = None
         self._refresh_worker: SnapshotRefreshWorker | None = None
         self._refresh_pending = False
@@ -51,15 +52,15 @@ class MainWindow(QMainWindow):
         self.resize(config.window_width, config.window_height)
 
         self.status_panel = StatusPanel(self)
-        self.refresh_button = QPushButton("刷新数据", self)
-        self.run_button = QPushButton("运行今日主控", self)
-        self.open_reports_button = QPushButton("打开 reports 目录", self)
-        self.open_logs_button = QPushButton("打开日志目录", self)
+        self.refresh_button = QPushButton(get_message("refresh_data", "刷新数据"), self)
+        self.run_button = QPushButton(get_message("run_today", "运行今日主控"), self)
+        self.open_reports_button = QPushButton(get_message("open_reports", "打开报表目录"), self)
+        self.open_logs_button = QPushButton(get_message("open_logs", "打开日志目录"), self)
         self.trading_date_edit = QDateEdit(self)
         self.tabs = QTabWidget(self)
-        self.summary_viewer = SummaryViewer("主控摘要", self)
-        self.log_viewer = LogViewer("运行日志", max_lines=config.runtime_log_limit, parent=self)
-        self.stage_status_page = TablePage("主控阶段状态", show_summary=False, parent=self)
+        self.summary_viewer = SummaryViewer(get_message("summary_page_title", "主控摘要"), self)
+        self.log_viewer = LogViewer(get_message("log_page_title", "主控运行日志"), max_lines=config.runtime_log_limit, parent=self)
+        self.stage_status_page = TablePage(get_message("stage_status_title", "主控阶段状态"), show_summary=False, parent=self)
         self.page_widgets: dict[str, TablePage] = {}
         self.refresh_timer = QTimer(self)
 
@@ -73,12 +74,12 @@ class MainWindow(QMainWindow):
         if self._refresh_thread is not None:
             self._refresh_pending = True
             self._refresh_reason = reason
-            self.statusBar().showMessage("刷新任务仍在进行，本次刷新已排队。")
+            self.statusBar().showMessage(get_message("refresh_pending", "刷新任务仍在进行，本次刷新请求已排队。"))
             return
 
         self._refresh_reason = reason
         self.refresh_button.setEnabled(False)
-        self.statusBar().showMessage(f"正在后台刷新数据: {reason}")
+        self.statusBar().showMessage(f"{get_message('refreshing_prefix', '正在后台刷新数据')}：{reason}")
 
         self._refresh_thread = QThread()
         self._refresh_worker = SnapshotRefreshWorker(config=self.config, logger=self.logger)
@@ -130,10 +131,10 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 3)
 
         summary_layout.addWidget(splitter)
-        self.tabs.addTab(summary_tab, "摘要/日志")
+        self.tabs.addTab(summary_tab, get_page_label("summary_logs"))
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage(f"自动刷新间隔: {self.config.auto_refresh_ms // 1000} 秒")
+        self.statusBar().showMessage(f"自动刷新间隔：{self.config.auto_refresh_ms // 1000} 秒")
 
     def _connect_signals(self) -> None:
         self.refresh_button.clicked.connect(lambda: self.request_refresh("manual"))
@@ -147,7 +148,7 @@ class MainWindow(QMainWindow):
         self.runner.stage_changed.connect(self._on_runner_stage_changed)
         self.runner.run_finished.connect(self._on_runner_finished)
         self.runner.start_rejected.connect(
-            lambda message: self.alert_manager.notify_error("主控无法启动", message, blocking=False)
+            lambda message: self.alert_manager.notify_error(get_message("runner_start_failed", "主控无法启动"), message, blocking=False)
         )
 
     def _prime_log_viewer(self) -> None:
@@ -162,19 +163,16 @@ class MainWindow(QMainWindow):
         self.stage_status_page.update_page(snapshot.stage_status_page)
         self.summary_viewer.set_content(
             snapshot.orchestrator_summary_text,
-            status=f"主控状态: {snapshot.orchestrator_status}",
+            status=f"{get_message('summary_status_prefix', '主控执行情况：')}{format_status_text(snapshot.orchestrator_status)}",
         )
 
         qdate = QDate.fromString(snapshot.trading_date, "yyyy-MM-dd")
         if qdate.isValid():
             self.trading_date_edit.setDate(qdate)
 
-        reports_status = (
-            f"{snapshot.key_files_present}/{snapshot.key_files_total} 关键报表存在 | "
-            f"{snapshot.reports_file_count} 个文件 | 最近: {snapshot.reports_last_modified}"
-        )
-        orchestrator_status = self.runner_status_text if self.runner.is_running else snapshot.orchestrator_status
-        current_stage = self.runner_stage_text if self.runner.is_running else snapshot.current_stage
+        reports_status = self._build_reports_status(snapshot)
+        orchestrator_status = self.runner_status_text if self.runner.is_running else format_status_text(snapshot.orchestrator_status)
+        current_stage = self.runner_stage_text if self.runner.is_running else format_status_text(snapshot.current_stage)
         alert_status = self._build_alert_status(snapshot)
         self.status_panel.update_values(
             {
@@ -193,22 +191,22 @@ class MainWindow(QMainWindow):
         self.runner.start(trading_date)
 
     def _on_runner_started(self, trading_date: str) -> None:
-        self.runner_status_text = f"运行中 / {trading_date}"
-        self.runner_stage_text = "主控已启动"
+        self.runner_status_text = get_message("runner_running_template", "运行中 / {trading_date}").format(trading_date=trading_date)
+        self.runner_stage_text = get_message("runner_started", "主控已启动")
         self.run_button.setEnabled(False)
-        self._append_runtime_line(f"[ui] 已启动主控任务: {trading_date}")
+        self._append_runtime_line(f"[ui] 已启动主控任务：{trading_date}")
         if self.snapshot is not None:
             self._apply_snapshot(self.snapshot)
 
     def _on_runner_stage_changed(self, stage_text: str) -> None:
         self.runner_stage_text = stage_text
-        self._append_runtime_line(f"[ui] 当前阶段: {stage_text}")
+        self._append_runtime_line(f"[ui] 当前阶段：{stage_text}")
         if self.snapshot is not None:
             self._apply_snapshot(self.snapshot)
 
     def _on_runner_finished(self, success: bool, exit_code: int, message: str) -> None:
-        self.runner_status_text = "空闲"
-        self.runner_stage_text = "已结束"
+        self.runner_status_text = get_message("runner_idle", "空闲")
+        self.runner_stage_text = get_message("runner_finished", "已结束")
         self.run_button.setEnabled(True)
         self._append_runtime_line(f"[ui] {message}")
         self.request_refresh("post-run")
@@ -218,8 +216,8 @@ class MainWindow(QMainWindow):
         if not success:
             QMessageBox.critical(
                 self,
-                "主控运行失败",
-                f"{message}\n请检查摘要/日志页中的 stdout/stderr 和阶段状态。",
+                get_message("runner_failed_dialog", "主控运行失败"),
+                get_message("runner_failed_detail", "{message}\n请检查摘要/日志页中的 stdout/stderr 和阶段状态。").format(message=message),
             )
 
     def _on_snapshot_ready(self, snapshot: object, duration_ms: int) -> None:
@@ -232,12 +230,14 @@ class MainWindow(QMainWindow):
         alerts = self.alert_manager.evaluate_snapshot(snapshot)
         self.alert_manager.process_alerts(alerts)
         self.refresh_button.setEnabled(True)
-        self.statusBar().showMessage(f"数据刷新完成，用时 {duration_ms} ms")
+        self.statusBar().showMessage(
+            get_message("refresh_done_template", "数据刷新完成，用时 {duration_ms} ms").format(duration_ms=duration_ms)
+        )
         self.logger.info("UI 数据刷新完成: %s ms", duration_ms)
 
     def _on_refresh_failed(self, message: str) -> None:
         self.refresh_button.setEnabled(True)
-        self.statusBar().showMessage("刷新失败，请检查日志。")
+        self.statusBar().showMessage(get_message("refresh_failed", "刷新失败，请检查日志。"))
         self.logger.error("UI 数据刷新失败: %s", message)
         self.alert_manager.notify_error("刷新失败", f"刷新数据时发生错误：{message}", blocking=False)
 
@@ -256,8 +256,21 @@ class MainWindow(QMainWindow):
     def _build_alert_status(self, snapshot: DashboardSnapshot) -> str:
         alerts = self.alert_manager.evaluate_snapshot(snapshot)
         if not alerts:
-            return "无告警"
+            return get_message("alert_none", "无提醒")
         return f"{alerts[0].title} 等 {len(alerts)} 项"
+
+    def _build_reports_status(self, snapshot: DashboardSnapshot) -> str:
+        if not snapshot.reports_dir_exists:
+            return get_message("reports_missing_mode", "未找到报表目录，已进入空白监控模式")
+        return get_message(
+            "reports_ready_template",
+            "已就绪 {present}/{total} 份关键报表，共 {file_count} 个文件；最近更新：{recent}",
+        ).format(
+            present=snapshot.key_files_present,
+            total=snapshot.key_files_total,
+            file_count=snapshot.reports_file_count,
+            recent=snapshot.reports_last_modified,
+        )
 
     def _append_runtime_line(self, line: str) -> None:
         self.logger.info(line)
@@ -268,7 +281,10 @@ class MainWindow(QMainWindow):
         ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         if not ok:
             self.alert_manager.notify_error(
-                "打开目录失败",
-                f"无法打开目录：{path}\n请确认系统资源管理器可用，或手动打开该路径。",
+                get_message("open_directory_failed", "打开目录失败"),
+                get_message(
+                    "open_directory_failed_message",
+                    "无法打开目录：{path}\n请确认系统资源管理器可用，或手动打开该路径。",
+                ).format(path=path),
                 blocking=False,
             )

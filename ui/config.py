@@ -4,10 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import sys
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
     import tomli as tomllib
+
+from ui.display_labels import get_message, get_page_label
 
 
 @dataclass(frozen=True)
@@ -18,49 +21,49 @@ class ReportSpec:
     title: str
     csv_name: str
     summary_name: str | None = None
-    empty_message: str = "文件不存在/尚未生成"
+    empty_message: str = get_message("file_missing", "文件不存在/尚未生成")
 
 
 DEFAULT_REPORT_SPECS = (
     ReportSpec(
         key="candidates",
-        title="今日候选",
+        title=get_page_label("candidates"),
         csv_name="daily_candidates_top20.csv",
         summary_name="daily_candidates_summary.txt",
     ),
     ReportSpec(
         key="trade_plan",
-        title="交易计划",
+        title=get_page_label("trade_plan"),
         csv_name="daily_trade_plan_top10.csv",
         summary_name="daily_execution_plan_summary.txt",
     ),
     ReportSpec(
         key="portfolio",
-        title="风控后组合",
+        title=get_page_label("portfolio"),
         csv_name="daily_portfolio_plan_risk_checked.csv",
         summary_name="daily_portfolio_summary_risk_checked.txt",
     ),
     ReportSpec(
         key="open_execution",
-        title="开盘执行",
+        title=get_page_label("open_execution"),
         csv_name="daily_open_execution_orders.csv",
         summary_name="daily_open_execution_summary.txt",
     ),
     ReportSpec(
         key="intraday_recheck",
-        title="盘中复检",
+        title=get_page_label("intraday_recheck"),
         csv_name="daily_intraday_recheck_orders.csv",
         summary_name="daily_intraday_recheck_summary.txt",
     ),
     ReportSpec(
         key="close_review",
-        title="收盘复盘",
+        title=get_page_label("close_review"),
         csv_name="daily_close_review.csv",
         summary_name="daily_close_review_summary.txt",
     ),
     ReportSpec(
         key="next_day_management",
-        title="次日管理",
+        title=get_page_label("next_day_management"),
         csv_name="daily_next_day_management.csv",
         summary_name="daily_next_day_management_summary.txt",
     ),
@@ -90,12 +93,7 @@ DEFAULT_CONFIG_FILE = Path(__file__).with_name("ui_config.toml")
 def load_config(config_path: str | Path | None = None) -> AppConfig:
     """Load UI configuration from TOML with safe defaults."""
 
-    selected_path = Path(
-        config_path
-        or os.getenv("QUANT_UI_CONFIG")
-        or DEFAULT_CONFIG_FILE
-    )
-
+    selected_path = Path(config_path or os.getenv("QUANT_UI_CONFIG") or DEFAULT_CONFIG_FILE)
     config_dir = selected_path.parent
     raw = _read_toml_file(selected_path)
 
