@@ -12,12 +12,13 @@ import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 
 from ui.config import AppConfig, ReportSpec
-from ui.display_labels import get_message, get_page_label
+from ui.display_labels import format_status_text, get_message, get_page_label
 
 
 CSV_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
 TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
 CANDIDATES_SUMMARY_DATE_PATTERN = re.compile(r"目标交易日[:：]\s*(\d{4}-\d{2}-\d{2})")
+PENDING_ORCHESTRATOR_STATUSES = {"NON_TRADING_DAY", "WAITING_MARKET_DATA", "DATA_STALE"}
 
 
 @dataclass
@@ -89,6 +90,11 @@ class ReportDataLoader:
         summary_txt_path = reports_dir / "daily_orchestrator_summary.txt"
         summary_json = self._safe_read_json(summary_json_path)
         summary_text = self._safe_read_text(summary_txt_path, "主控摘要尚未生成。")
+        summary_text = self._build_orchestrator_summary_text(
+            summary_json=summary_json,
+            fallback_text=summary_text,
+            reports_dir=reports_dir,
+        )
 
         trading_date = self._resolve_trading_date(summary_json, pages)
         reports_file_count, reports_last_modified = self._describe_reports_dir(reports_dir)
@@ -126,7 +132,7 @@ class ReportDataLoader:
         last_modified_text = self._format_timestamp(csv_path) if exists else "-"
         summary_status = summary_path.name if summary_path and summary_path.exists() else "摘要未生成"
         file_status_text = (
-            f"{csv_path.name} | {row_count} 行 / {column_count} 列 | 最近更新 {last_modified_text} | {summary_status}"
+            f"{csv_path.name} | {row_count} 行 / {column_count} 列 | 最近更新：{last_modified_text} | {summary_status}"
             if exists
             else f"{csv_path.name} | 文件不存在/尚未生成 | {summary_status}"
         )
@@ -139,6 +145,7 @@ class ReportDataLoader:
                 file_status_text=file_status_text,
                 summary_exists=bool(summary_path and summary_path.exists()),
             )
+        summary_text = self._localize_summary_text(summary_text)
 
         return PageData(
             spec=spec,
@@ -232,6 +239,50 @@ class ReportDataLoader:
             self.logger.warning("读取 JSON 失败: %s | %s", path, exc)
             return {}
 
+    def _localize_summary_text(self, summary_text: str) -> str:
+        text = str(summary_text or "").strip()
+        if not text:
+            return text
+        return format_status_text(text)
+
+    def _build_orchestrator_summary_text(
+        self,
+        summary_json: dict[str, Any],
+        fallback_text: str,
+        reports_dir: Path,
+    ) -> str:
+        acceptance_status = str(summary_json.get("acceptance_status", "")).strip().upper()
+        if acceptance_status not in PENDING_ORCHESTRATOR_STATUSES:
+            return fallback_text
+
+        latest_available_date = self._extract_latest_available_date(summary_json, reports_dir)
+        if acceptance_status == "NON_TRADING_DAY":
+            if latest_available_date:
+                return f"目标日期为非交易日，当前最新可用行情日期为 {latest_available_date}"
+            return "目标日期为非交易日，当前暂无可用行情日期。"
+        if acceptance_status == "WAITING_MARKET_DATA":
+            if latest_available_date:
+                return f"目标日期行情尚未到齐，当前最新可用行情日期为 {latest_available_date}"
+            return "目标日期行情尚未到齐，当前暂无可用行情日期。"
+        if acceptance_status == "DATA_STALE":
+            if latest_available_date:
+                return f"当前行情数据已过期，最新可用行情日期为 {latest_available_date}"
+            return "当前行情数据已过期，且暂未识别到可用行情日期。"
+        return fallback_text
+
+    def _extract_latest_available_date(self, summary_json: dict[str, Any], reports_dir: Path) -> str:
+        stage_results = summary_json.get("stage_results", [])
+        if isinstance(stage_results, list):
+            for stage_result in stage_results:
+                if not isinstance(stage_result, dict):
+                    continue
+                latest_available_date = str(stage_result.get("latest_available_date", "")).strip()
+                if latest_available_date:
+                    return latest_available_date
+
+        candidate_status_json = self._safe_read_json(reports_dir / "daily_candidates_status.json")
+        return str(candidate_status_json.get("latest_available_date", "")).strip()
+
     def _resolve_trading_date(self, summary_json: dict[str, Any], pages: dict[str, PageData]) -> str:
         summary_date = str(summary_json.get("trading_date", "")).strip()
         if summary_date:
@@ -287,6 +338,25 @@ class ReportDataLoader:
         return "NOT_RUN"
 
     def _resolve_current_stage(self, summary_json: dict[str, Any], stage_status_page: PageData) -> str:
+        acceptance_status = str(summary_json.get("acceptance_status", "")).strip().upper()
+        if acceptance_status in PENDING_ORCHESTRATOR_STATUSES:
+            stage_results = summary_json.get("stage_results", [])
+            if isinstance(stage_results, list):
+                for item in stage_results:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("stage_status", "")).strip().upper() != acceptance_status:
+                        continue
+                    if item.get("blocked"):
+                        continue
+                    stage_name = str(item.get("stage_name", "")).strip()
+                    if stage_name:
+                        return f"{stage_name} / {acceptance_status}"
+                    stage_no = item.get("stage_no")
+                    if isinstance(stage_no, int):
+                        return f"Stage {stage_no:02d} / {acceptance_status}"
+                    return acceptance_status
+
         dataframe = stage_status_page.dataframe
         if {"stage_name", "stage_status"}.issubset(dataframe.columns) and not dataframe.empty:
             last_row = dataframe.iloc[-1]
@@ -310,8 +380,23 @@ class ReportDataLoader:
         if not reports_dir_exists:
             return get_message("reports_missing_mode", "未找到报表目录，已进入空白监控模式")
 
+        acceptance_status = str(summary_json.get("acceptance_status", "")).strip().upper()
+        latest_available_date = self._extract_latest_available_date(summary_json, self.config.reports_dir)
+        if acceptance_status == "NON_TRADING_DAY":
+            if latest_available_date:
+                return f"目标日期为非交易日，最新可用行情日期为 {latest_available_date}"
+            return "目标日期为非交易日"
+        if acceptance_status == "WAITING_MARKET_DATA":
+            if latest_available_date:
+                return f"目标日期行情未到齐，最新可用行情日期为 {latest_available_date}"
+            return "目标日期行情未到齐"
+        if acceptance_status == "DATA_STALE":
+            if latest_available_date:
+                return f"行情数据已过期，最新可用行情日期为 {latest_available_date}"
+            return "行情数据已过期"
+
         if self._count_failed_stages(summary_json, stage_status_page) > 0:
-            return "主控存在失败阶段，请查看摘要/日志页"
+            return "主控存在失败阶段，请查看摘要/日志页。"
 
         page_errors = [page.spec.title for page in pages.values() if page.load_error]
         if page_errors:
